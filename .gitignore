@@ -1,0 +1,20 @@
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+*.egg-info/
+
+# Swift
+.build/
+.swiftpm/
+DerivedData/
+
+# Local environment
+.env
+.logs/
+.cache/
+.launchd/
