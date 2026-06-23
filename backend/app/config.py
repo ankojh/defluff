@@ -34,6 +34,20 @@ class Settings(BaseSettings):
     youtube_cookies_from_browser: str = ""
     youtube_cookie_file: str = ""
 
+    @property
+    def ollama_keep_alive_value(self) -> int | str:
+        """Value to send to Ollama as ``keep_alive``.
+
+        Ollama accepts either a number of seconds (``-1`` = keep loaded forever,
+        ``0`` = unload immediately) or a duration *string* with a unit like
+        ``"5m"``. A bare ``"-1"``/``"0"`` must be sent as an int, because Ollama
+        parses strings as Go durations and rejects ``"-1"`` ("missing unit").
+        """
+        try:
+            return int(self.ollama_keep_alive)
+        except (TypeError, ValueError):
+            return self.ollama_keep_alive
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 
