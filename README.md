@@ -43,27 +43,41 @@ keys, no cloud, no telemetry. Your data is yours.
 
 ## Install
 
-> Requires a Mac (Apple Silicon recommended) running macOS 14+.
+> Requires a Mac (Apple Silicon recommended) running macOS 14+ with the Xcode
+> command-line tools (`xcode-select --install`).
 
-1. **Download** the latest `Defluff.dmg` from the
-   [Releases page](https://github.com/ankojh/defluff/releases/latest).
-2. **Open** it and drag **Defluff** into **Applications**.
-3. **Launch** Defluff. The first run sets everything up for you — it installs the
-   local services and downloads the model (a one-time ~17 GB download), shown in a
-   Terminal window. After that, it just works.
+Build it on your own machine and macOS trusts it — **the app opens with no
+Gatekeeper warning:**
 
-> **First-launch note:** the app isn't signed with a paid Apple Developer ID, so
-> macOS blocks it the first time. Go to **System Settings → Privacy & Security →
-> Open Anyway**, or run once:
-> ```sh
-> xattr -dr com.apple.quarantine /Applications/Defluff.app
-> ```
+```sh
+git clone git@github.com:ankojh/defluff.git
+cd defluff
+./scripts/build-dmg.sh     # produces dist/Defluff.dmg
+open dist/Defluff.dmg      # then drag Defluff into Applications
+```
 
-Once set up, the backend, database, and model server start automatically at login
-and stay running on their own — open the app whenever you like.
+Launch Defluff. The first run sets everything up for you — it installs the local
+services and downloads the model (a one-time ~17 GB download), shown in a Terminal
+window. After that the backend, database, and model server start automatically at
+login and stay running on their own; just open the app whenever you like.
+
+> Clone with `git` — **not** GitHub's "Download ZIP". A downloaded zip is
+> quarantined by macOS, which brings back the Gatekeeper prompt. Building locally
+> from a clone does not.
 
 To remove everything: `~/Library/Application\ Support/Defluff/scripts/uninstall.sh`
 (add `--purge` to also delete the model).
+
+### Sharing a prebuilt build
+
+You can hand someone the built `Defluff.dmg` directly. The app isn't signed with a
+paid Apple Developer ID, so a copy that arrives over the internet or AirDrop is
+blocked by macOS the first time — open **System Settings → Privacy & Security →
+Open Anyway**, or run once:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Defluff.app
+```
 
 ## How it works
 
