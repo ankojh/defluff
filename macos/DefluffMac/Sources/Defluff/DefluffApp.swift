@@ -9,7 +9,7 @@ struct DefluffApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView(client: BackendClient())
+            SetupGate()
         }
     }
 }

@@ -6,6 +6,10 @@ class Settings(BaseSettings):
     service_name: str = "defluff-backend"
     ollama_host: str = "http://127.0.0.1:11434"
     ollama_model: str = "gemma4:26B"
+    # How long Ollama keeps the model resident after a request. "-1" pins it in
+    # memory indefinitely (instant responses, ~17GB held); "5m" is Ollama's
+    # default; "0" unloads immediately after each request to reclaim RAM.
+    ollama_keep_alive: str = "-1"
     analysis_max_chars: int = 30000
     # Higher budget/timeout because thinking tokens share num_predict with the
     # JSON answer; too small a budget truncates the JSON and breaks parsing.

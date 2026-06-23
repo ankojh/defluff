@@ -396,6 +396,7 @@ class LocalOllamaDiscussionAgent:
             messages=messages,
             think=True,
             stream=True,
+            keep_alive=settings.ollama_keep_alive,
             options={
                 "temperature": 0.4,
                 "num_predict": settings.discuss_num_predict,
@@ -1108,6 +1109,7 @@ async def _chat_json(
             format="json",
             think=think,
             stream=True,
+            keep_alive=settings.ollama_keep_alive,
             options={
                 "temperature": temperature,
                 "num_predict": num_predict,

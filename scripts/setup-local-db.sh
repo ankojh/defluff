@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEFLUFF_HOME="${DEFLUFF_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+SCHEMA_FILE="${DEFLUFF_SCHEMA:-$DEFLUFF_HOME/backend/sql/schema.sql}"
 DB_NAME="${DB_NAME:-defluff}"
 DB_USER="${DB_USER:-defluff}"
 DB_PASSWORD="${DB_PASSWORD:-defluff}"
 DATABASE_URL="${DATABASE_URL:-postgresql://$DB_USER:$DB_PASSWORD@127.0.0.1:5432/$DB_NAME}"
+
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 if ! command -v psql >/dev/null 2>&1; then
     echo "psql was not found. Install Postgres first."
@@ -25,6 +29,6 @@ select format('create database %I owner %I', :'db_name', :'db_user')
 where not exists (select 1 from pg_database where datname = :'db_name')\gexec
 SQL
 
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/backend/sql/schema.sql"
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$SCHEMA_FILE"
 
 echo "Local database is ready: $DATABASE_URL"

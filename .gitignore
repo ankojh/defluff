@@ -13,6 +13,9 @@ __pycache__/
 .swiftpm/
 DerivedData/
 
+# Build output
+dist/
+
 # Local environment
 .env
 .logs/
