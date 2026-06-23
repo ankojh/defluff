@@ -18,7 +18,12 @@ from app.models import (
     ResearchResult,
     ResearchTopic,
 )
-from app.ollama_agent import LocalOllamaConsumptionAgent, LocalOllamaResearchPlanner, timestamp_label
+from app.ollama_agent import (
+    LocalOllamaConsumptionAgent,
+    LocalOllamaResearchPlanner,
+    preload_model,
+    timestamp_label,
+)
 from app.research import (
     fetch_research_documents,
     fallback_research_topics_for_content,
@@ -33,6 +38,10 @@ ProgressCallback = Callable[[AgentTrace], Awaitable[None]]
 AnalysisEventCallback = Callable[[ConsumeStreamEvent], Awaitable[None]]
 
 _THINKING_PREVIEW_CHARS = 1600
+
+# Strong references to in-flight model-warmup tasks, so they aren't garbage
+# collected before they finish (asyncio only keeps weak references).
+_warmup_tasks: set[asyncio.Task] = set()
 
 
 def _thinking_detail(thinking: str | None) -> str | None:
@@ -55,6 +64,14 @@ async def consume_url(
     analyze: bool = True,
 ) -> ConsumeResponse:
     logger.info("consume.start url=%s language=%s", url, language)
+    # Warm the model into memory while we fetch and extract content. Content
+    # fetching/transcription takes seconds (or longer for video), which hides the
+    # model load so the first Ollama call is instant even though the model
+    # unloads when idle to save RAM.
+    if analyze:
+        warmup = asyncio.create_task(preload_model())
+        _warmup_tasks.add(warmup)  # hold a strong ref so it isn't GC'd mid-flight
+        warmup.add_done_callback(_warmup_tasks.discard)
     await _emit(
         progress,
         AgentTrace(

@@ -125,9 +125,10 @@ if [[ ! -f "$DEFLUFF_HOME/.env" ]]; then
 DATABASE_URL=postgresql://defluff:defluff@127.0.0.1:5432/defluff
 OLLAMA_HOST=$OLLAMA_URL
 OLLAMA_MODEL=$OLLAMA_MODEL
-# "-1" keeps the model resident for instant responses; "0" unloads after each
-# request to reclaim RAM; "5m" is Ollama's default.
-OLLAMA_KEEP_ALIVE=-1
+# How long the model stays in RAM after use. The model is preloaded while content
+# is fetched, so cold starts are hidden; this just spans a single consume. "2m"
+# frees ~17GB shortly after you stop. Keep >= 60s; "-1" pins it forever.
+OLLAMA_KEEP_ALIVE=2m
 SEARCH_PROVIDER=duckduckgo
 GOOGLE_SEARCH_API_KEY=
 GOOGLE_SEARCH_ENGINE_ID=

@@ -29,6 +29,26 @@ class AnalysisError(RuntimeError):
     pass
 
 
+async def preload_model() -> None:
+    """Warm the model into memory without generating any tokens.
+
+    Called at the start of a consume so the model loads in parallel with content
+    fetching/transcription; by the time the first real Ollama call runs, the
+    model is resident and the request is instant even though it unloads when
+    idle to save RAM. Best-effort: failures are logged, never raised.
+    """
+    client = ollama.AsyncClient(host=settings.ollama_host)
+    try:
+        await client.generate(
+            model=settings.ollama_model,
+            prompt="",
+            keep_alive=settings.ollama_keep_alive_value,
+        )
+        write_debug_event("ollama.preloaded", model=settings.ollama_model)
+    except Exception as error:  # noqa: BLE001 - preload is best-effort
+        logger.info("ollama.preload_failed error=%s", error)
+
+
 @dataclass(frozen=True)
 class ChapterAnalysis:
     title: str

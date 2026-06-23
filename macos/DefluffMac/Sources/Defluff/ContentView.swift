@@ -609,49 +609,233 @@ struct ContentView: View {
     // MARK: Result body (summary is the focus)
 
     private func consumeBody(_ response: ConsumeResponse) -> some View {
-        VStack(alignment: .leading, spacing: 26) {
+        let analysis = response.analysis
+        return VStack(alignment: .leading, spacing: 26) {
+            headerSection(response.content)
+
+            Divider().overlay(Theme.hairline)
+
+            // Payoff first: TL;DR and key takeaways before the longer-form aids.
+            if let tldr = analysis.tldr {
+                tldrSection(tldr)
+            }
+            keyTakeawaysSection(analysis.keyPoints, novel: analysis.novelPoints)
+            summarySection(analysis)
+            bulletSection(title: "Flow", items: analysis.readingFlow)
+
+            // Context & terms — comprehension scaffolding.
+            bulletSection(title: "Context helpers", items: analysis.contextHelpers)
+            if !analysis.glossary.isEmpty {
+                glossarySection(analysis.glossary)
+            }
+            visualAidsSection(analysis.visualAids)
+
+            // Navigate the source.
+            if !analysis.chapters.isEmpty {
+                chaptersSection(
+                    analysis.chapters,
+                    sourceURL: response.content.url,
+                    sourceTitle: response.content.title
+                )
+            }
+            if !analysis.highlights.isEmpty {
+                highlightsSection(
+                    analysis.highlights,
+                    sourceURL: response.content.url,
+                    sourceTitle: response.content.title
+                )
+            }
+
+            researchSection(response)
+            discussionSection(response)
+            alreadyKnownSection(response)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: Header (title, source, thumbnail, original link)
+
+    private func headerSection(_ content: ContentResponse) -> some View {
+        HStack(alignment: .top, spacing: 16) {
+            if let thumb = thumbnailURL(content) {
+                AsyncImage(url: thumb) { image in
+                    image.resizable().aspectRatio(contentMode: .fill)
+                } placeholder: {
+                    Rectangle().fill(Theme.paperRaised)
+                }
+                .frame(width: 132, height: 84)
+                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.hairline, lineWidth: 1))
+            }
+
             VStack(alignment: .leading, spacing: 6) {
-                if let title = response.content.title {
+                if let title = content.title {
                     Text(title)
                         .font(Theme.serif(26, weight: .semibold))
                         .foregroundStyle(Theme.ink)
                         .textSelection(.enabled)
                 }
-                Text(contentSummary(for: response.content))
+                Text(contentSummary(for: content))
                     .font(Theme.serifItalic(14))
                     .foregroundStyle(Theme.inkFaint)
+
+                if let url = URL(string: content.url) {
+                    Link(destination: url) {
+                        HStack(spacing: 5) {
+                            Image(systemName: "arrow.up.right.square")
+                            Text(url.host ?? "Open original")
+                        }
+                        .font(Theme.text(12, weight: .semibold))
+                    }
+                    .foregroundStyle(Theme.accent)
+                    .padding(.top, 2)
+                }
             }
 
-            Divider().overlay(Theme.hairline)
-
-            if hasAnalysis(response.analysis) {
-                analysisSection(response.analysis)
-            }
-            keyTakeawaysSection(response.analysis.keyPoints)
-            if !response.analysis.chapters.isEmpty {
-                chaptersSection(
-                    response.analysis.chapters,
-                    sourceURL: response.content.url,
-                    sourceTitle: response.content.title
-                )
-            }
-            if !response.analysis.highlights.isEmpty {
-                highlightsSection(
-                    response.analysis.highlights,
-                    sourceURL: response.content.url,
-                    sourceTitle: response.content.title
-                )
-            }
-            if !response.researchDocuments.isEmpty {
-                researchLinksSection(response.researchDocuments)
-            }
-            if !response.knowledgeMatches.isEmpty || !response.analysis.alreadyKnown.isEmpty {
-                knowledgeSection(response)
-            }
-
-            discussionSection(response)
+            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Best available preview image for the header — the first content image, if any.
+    private func thumbnailURL(_ content: ContentResponse) -> URL? {
+        let candidate = content.media.first(where: { $0.kind == "image" }) ?? content.media.first
+        guard let urlString = candidate?.url else { return nil }
+        return URL(string: urlString)
+    }
+
+    // MARK: Distilled sections
+
+    private func tldrSection(_ tldr: String) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            Rectangle()
+                .fill(Theme.accent)
+                .frame(width: 2)
+            Text(tldr)
+                .font(Theme.serifItalic(20))
+                .foregroundStyle(Theme.ink)
+                .textSelection(.enabled)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder
+    private func summarySection(_ analysis: ConsumptionAnalysis) -> some View {
+        let points = analysis.summaryPoints.isEmpty
+            ? summaryPoints(analysis.summary)
+            : analysis.summaryPoints
+        if !points.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                heading("Summary")
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(points, id: \.self) { point in
+                        HStack(alignment: .top, spacing: 10) {
+                            Text("—")
+                                .foregroundStyle(Theme.inkFaint)
+                            Text(point)
+                                .font(Theme.serif(15))
+                                .foregroundStyle(Theme.ink)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    private func visualAidsSection(_ aids: [VisualAid]) -> some View {
+        if !aids.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                subheading("Visual aids")
+                ForEach(aids) { aid in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(aid.title)
+                            .font(Theme.serif(15, weight: .semibold))
+                            .foregroundStyle(Theme.ink)
+                        Text(aid.explanation)
+                            .font(Theme.serif(14))
+                            .foregroundStyle(Theme.inkSoft)
+                            .textSelection(.enabled)
+
+                        if let urlString = aid.imageURL, let url = URL(string: urlString) {
+                            AsyncImage(url: url) { image in
+                                image.resizable().aspectRatio(contentMode: .fit)
+                            } placeholder: {
+                                ProgressView().controlSize(.small)
+                            }
+                            .frame(maxWidth: 440, maxHeight: 300)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.hairline, lineWidth: 1))
+                        } else if let diagram = aid.suggestedDiagram {
+                            Text(diagram)
+                                .font(Theme.serifItalic(13))
+                                .foregroundStyle(Theme.inkFaint)
+                                .padding(10)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Theme.paper)
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.hairline, lineWidth: 1))
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    private func researchSection(_ response: ConsumeResponse) -> some View {
+        let analysis = response.analysis
+        let hasResearch = !analysis.researchContext.isEmpty
+            || !analysis.researchHighlights.isEmpty
+            || !response.researchDocuments.isEmpty
+        if hasResearch {
+            VStack(alignment: .leading, spacing: 14) {
+                heading("Research")
+                bulletSection(title: "Context", items: analysis.researchContext)
+                if !analysis.researchHighlights.isEmpty {
+                    researchHighlightsSection(analysis.researchHighlights)
+                }
+                if !response.researchDocuments.isEmpty {
+                    researchLinksSection(response.researchDocuments)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    private func alreadyKnownSection(_ response: ConsumeResponse) -> some View {
+        let known = response.analysis.alreadyKnown
+        let matches = response.knowledgeMatches
+        if !known.isEmpty || !matches.isEmpty {
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 12) {
+                    bulletSection(title: "Skipped — already known", items: known)
+                    ForEach(matches) { match in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(match.title ?? match.url)
+                                .font(Theme.serif(14, weight: .semibold))
+                                .foregroundStyle(Theme.inkSoft)
+                            Text(match.summary)
+                                .font(Theme.serif(13))
+                                .foregroundStyle(Theme.inkFaint)
+                                .lineLimit(3)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+                .padding(.top, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } label: {
+                Text("Already known")
+                    .font(Theme.serif(14, weight: .semibold))
+                    .foregroundStyle(Theme.inkSoft)
+            }
+            .tint(Theme.inkSoft)
+        }
     }
 
     private func hasAnalysis(_ analysis: ConsumptionAnalysis) -> Bool {
@@ -662,22 +846,21 @@ struct ContentView: View {
     private func liveDigestPanel() -> some View {
         VStack(alignment: .leading, spacing: 20) {
             if let content = streamedContent {
-                VStack(alignment: .leading, spacing: 6) {
-                    if let title = content.title {
-                        Text(title)
-                            .font(Theme.serif(22, weight: .semibold))
-                            .foregroundStyle(Theme.ink)
-                            .textSelection(.enabled)
-                    }
-                    Text(contentSummary(for: content))
-                        .font(Theme.serifItalic(13))
-                        .foregroundStyle(Theme.inkFaint)
-                }
+                headerSection(content)
             }
 
             if let analysis = streamedAnalysis, hasAnalysis(analysis) {
-                analysisSection(analysis)
-                keyTakeawaysSection(analysis.keyPoints)
+                if let tldr = analysis.tldr {
+                    tldrSection(tldr)
+                }
+                keyTakeawaysSection(analysis.keyPoints, novel: analysis.novelPoints)
+                summarySection(analysis)
+                bulletSection(title: "Flow", items: analysis.readingFlow)
+                bulletSection(title: "Context helpers", items: analysis.contextHelpers)
+                if !analysis.glossary.isEmpty {
+                    glossarySection(analysis.glossary)
+                }
+                visualAidsSection(analysis.visualAids)
             }
 
             if !streamedChapters.isEmpty {
@@ -706,6 +889,10 @@ struct ContentView: View {
             Divider().overlay(Theme.hairline)
             heading("Discuss")
 
+            if discussion.isEmpty && !response.analysis.deepDiveQuestions.isEmpty {
+                deepDivePrompts(response)
+            }
+
             ForEach(discussion) { turn in
                 discussionTurnView(turn)
             }
@@ -731,6 +918,42 @@ struct ContentView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Clickable starter questions from the model's deep-dive suggestions;
+    /// tapping one asks it immediately.
+    private func deepDivePrompts(_ response: ConsumeResponse) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Start with…")
+                .font(Theme.text(11, weight: .semibold))
+                .tracking(1.5)
+                .foregroundStyle(Theme.inkFaint)
+
+            ForEach(response.analysis.deepDiveQuestions, id: \.self) { question in
+                Button {
+                    questionText = question
+                    Task { await ask(response) }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "arrow.turn.down.right")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Theme.accent)
+                        Text(question)
+                            .font(Theme.serif(14))
+                            .foregroundStyle(Theme.ink)
+                            .multilineTextAlignment(.leading)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Theme.hairline, lineWidth: 1))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(isDiscussing)
+            }
+        }
     }
 
     private func discussionTurnView(_ turn: DiscussTurn) -> some View {
@@ -839,65 +1062,9 @@ struct ContentView: View {
         isDiscussing = false
     }
 
-    private func analysisSection(_ analysis: ConsumptionAnalysis) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
-            heading("Summary")
-
-            if let tldr = analysis.tldr {
-                HStack(alignment: .top, spacing: 14) {
-                    Rectangle()
-                        .fill(Theme.accent)
-                        .frame(width: 2)
-                    Text(tldr)
-                        .font(Theme.serifItalic(20))
-                        .foregroundStyle(Theme.ink)
-                        .textSelection(.enabled)
-                }
-                .fixedSize(horizontal: false, vertical: true)
-            }
-
-            let points = analysis.summaryPoints.isEmpty
-                ? summaryPoints(analysis.summary)
-                : analysis.summaryPoints
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(points, id: \.self) { point in
-                    HStack(alignment: .top, spacing: 10) {
-                        Text("—")
-                            .foregroundStyle(Theme.inkFaint)
-                        Text(point)
-                            .font(Theme.serif(15))
-                            .foregroundStyle(Theme.ink)
-                            .textSelection(.enabled)
-                    }
-                }
-            }
-
-            bulletSection(title: "Flow", items: analysis.readingFlow)
-            bulletSection(title: "Context helpers", items: analysis.contextHelpers)
-
-            if !analysis.glossary.isEmpty {
-                glossarySection(analysis.glossary)
-            }
-
-            bulletSection(title: "Research context", items: analysis.researchContext)
-
-            if !analysis.researchHighlights.isEmpty {
-                researchHighlightsSection(analysis.researchHighlights)
-            }
-
-            bulletSection(title: "Continue deep diving", items: analysis.deepDiveQuestions)
-
-            // gemma's reasoning stays in the live "Ollama Summary" agent log
-            // (visible while processing); it is intentionally not repeated here.
-
-            bulletSection(title: "New to you", items: analysis.novelPoints)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
     @ViewBuilder
-    private func keyTakeawaysSection(_ items: [String]) -> some View {
-        if !items.isEmpty {
+    private func keyTakeawaysSection(_ items: [String], novel: [String] = []) -> some View {
+        if !items.isEmpty || !novel.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
                 heading("Key takeaways")
 
@@ -919,9 +1086,44 @@ struct ContentView: View {
                         }
                     }
                 }
+
+                if !novel.isEmpty {
+                    newToYouBlock(novel)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    /// The "it remembers what you know" payoff: points that are new to you,
+    /// versus what you've already consumed before.
+    private func newToYouBlock(_ items: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("NEW TO YOU")
+                    .font(Theme.text(10, weight: .semibold))
+                    .tracking(2)
+            }
+            .foregroundStyle(Theme.accent)
+
+            ForEach(items, id: \.self) { item in
+                HStack(alignment: .top, spacing: 10) {
+                    Text("—").foregroundStyle(Theme.accent)
+                    Text(item)
+                        .font(Theme.serif(15))
+                        .foregroundStyle(Theme.ink)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.accent.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.accent.opacity(0.3), lineWidth: 1))
     }
 
     private func researchHighlightsSection(_ highlights: [ResearchHighlight]) -> some View {
@@ -1190,7 +1392,7 @@ struct ContentView: View {
 
     private func researchLinksSection(_ documents: [ResearchDocument]) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            heading("Links")
+            subheading("Links")
 
             ForEach(documents) { document in
                 VStack(alignment: .leading, spacing: 5) {
@@ -1210,28 +1412,6 @@ struct ContentView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func knowledgeSection(_ response: ConsumeResponse) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            heading("Local knowledge")
-
-            bulletSection(title: "Already known", items: response.analysis.alreadyKnown)
-
-            ForEach(response.knowledgeMatches) { match in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(match.title ?? match.url)
-                        .font(Theme.serif(15, weight: .semibold))
-                        .foregroundStyle(Theme.ink)
-                    Text(match.summary)
-                        .font(Theme.serif(14))
-                        .foregroundStyle(Theme.inkSoft)
-                        .lineLimit(3)
-                        .textSelection(.enabled)
-                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

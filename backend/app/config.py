@@ -6,10 +6,13 @@ class Settings(BaseSettings):
     service_name: str = "defluff-backend"
     ollama_host: str = "http://127.0.0.1:11434"
     ollama_model: str = "gemma4:26B"
-    # How long Ollama keeps the model resident after a request. "-1" pins it in
-    # memory indefinitely (instant responses, ~17GB held); "5m" is Ollama's
-    # default; "0" unloads immediately after each request to reclaim RAM.
-    ollama_keep_alive: str = "-1"
+    # How long Ollama keeps the model resident after a call. The model is
+    # preloaded in parallel with content fetching, so the cold start is hidden;
+    # this only needs to outlast the gaps *within* a single consume (notably the
+    # web-research step). "2m" keeps it loaded while you work, then frees ~17GB
+    # shortly after you stop. Don't go below ~"60s" or a single consume may
+    # reload the model mid-pipeline. "-1" pins it in memory forever.
+    ollama_keep_alive: str = "2m"
     analysis_max_chars: int = 30000
     # Higher budget/timeout because thinking tokens share num_predict with the
     # JSON answer; too small a budget truncates the JSON and breaks parsing.
