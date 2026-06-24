@@ -1,16 +1,19 @@
-from html.parser import HTMLParser
+"""Web research orchestration: plan queries, search providers, fetch & read."""
+
 import asyncio
 import logging
 import re
 from collections.abc import Awaitable, Callable
-from urllib.parse import parse_qs, unquote, urljoin, urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 import lxml.html
 import trafilatura
 
-from app.config import settings
-from app.models import AgentTrace, ContentResponse, ResearchDocument, ResearchResult, ResearchTopic
+from app.core.config import settings
+from app.integrations.search import duckduckgo, google
+from app.integrations.search.duckduckgo import clean_result_url
+from app.schemas import AgentTrace, ContentResponse, ResearchDocument, ResearchResult, ResearchTopic
 
 logger = logging.getLogger(__name__)
 ProgressCallback = Callable[[AgentTrace], Awaitable[None]]
@@ -18,11 +21,6 @@ ProgressCallback = Callable[[AgentTrace], Awaitable[None]]
 SEARCH_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) Defluff/0.1",
 }
-
-SEARCH_ENDPOINTS = (
-    "https://html.duckduckgo.com/html/",
-    "https://lite.duckduckgo.com/lite/",
-)
 
 MAX_RESEARCH_QUERIES = 6
 RESULTS_PER_QUERY = 3
@@ -324,69 +322,13 @@ async def research_content(
     return []
 
 
-def google_search_configured() -> bool:
-    return bool(settings.google_search_api_key and settings.google_search_engine_id)
-
-
 def research_provider_description() -> str:
     if settings.search_provider.lower() == "google":
-        if google_search_configured():
+        if google.google_search_configured():
             return "Google Custom Search"
         return "Google requested, missing GOOGLE_SEARCH_API_KEY or GOOGLE_SEARCH_ENGINE_ID"
 
     return "DuckDuckGo"
-
-
-async def _google_search(
-    client: httpx.AsyncClient,
-    query: str,
-    limit: int,
-) -> list[ResearchResult]:
-    if not google_search_configured():
-        logger.info("research.google_skipped reason=missing_credentials")
-        return []
-
-    try:
-        response = await client.get(
-            "https://www.googleapis.com/customsearch/v1",
-            params={
-                "key": settings.google_search_api_key,
-                "cx": settings.google_search_engine_id,
-                "q": query,
-                "num": min(limit, 10),
-            },
-        )
-        logger.info(
-            "research.google_http_response status=%d bytes=%d",
-            response.status_code,
-            len(response.text),
-        )
-        response.raise_for_status()
-    except httpx.HTTPError as error:
-        logger.info("research.google_http_error error=%s", error)
-        return []
-
-    payload = response.json()
-    results: list[ResearchResult] = []
-    for item in payload.get("items", []):
-        title = item.get("title")
-        url = item.get("link")
-        if not title or not url:
-            continue
-
-        results.append(
-            ResearchResult(
-                title=title,
-                url=url,
-                snippet=item.get("snippet"),
-                source="Google",
-                query=query,
-            )
-        )
-        if len(results) >= limit:
-            break
-
-    return results
 
 
 async def _search_topic(
@@ -407,7 +349,7 @@ async def _search_topic(
         ),
     )
     if settings.search_provider.lower() == "google":
-        google_results = await _google_search(client, query, limit)
+        google_results = await google.search(client, query, limit)
         if google_results:
             logger.info("research.google_ready query=%r results=%d", query, len(google_results))
             await _emit_research_results(progress, query, google_results)
@@ -415,30 +357,10 @@ async def _search_topic(
 
         logger.info("research.google_empty_or_unconfigured query=%r fallback=duckduckgo", query)
 
-    for endpoint in SEARCH_ENDPOINTS:
-        try:
-            response = await client.get(endpoint, params={"q": query})
-            logger.info(
-                "research.http_response query=%r endpoint=%s status=%d bytes=%d",
-                query,
-                endpoint,
-                response.status_code,
-                len(response.text),
-            )
-            response.raise_for_status()
-        except httpx.HTTPError as error:
-            logger.info("research.http_error query=%r endpoint=%s error=%s", query, endpoint, error)
-            continue
-
-        if _looks_like_search_challenge(response.text):
-            logger.info("research.challenge query=%r endpoint=%s", query, endpoint)
-            continue
-
-        results = _parse_duckduckgo_html(response.text, limit, query=query)
-        logger.info("research.parsed query=%r endpoint=%s results=%d", query, endpoint, len(results))
-        if results:
-            await _emit_research_results(progress, query, results)
-            return results
+    results = await duckduckgo.search(client, query, limit)
+    if results:
+        await _emit_research_results(progress, query, results)
+        return results
 
     await _emit(
         progress,
@@ -657,45 +579,8 @@ async def _emit_research_results(
     )
 
 
-def _parse_duckduckgo_html(html: str, limit: int, query: str | None = None) -> list[ResearchResult]:
-    parser = _DuckDuckGoParser()
-    parser.feed(html)
-
-    results: list[ResearchResult] = []
-    for item in parser.results:
-        if not item.title or not item.url:
-            continue
-
-        results.append(
-            ResearchResult(
-                title=item.title.strip(),
-                url=_clean_result_url(item.url),
-                snippet=item.snippet.strip() if item.snippet else None,
-                source="DuckDuckGo",
-                query=query,
-            )
-        )
-        if len(results) >= limit:
-            break
-
-    return results
-
-
-def _looks_like_search_challenge(html: str) -> bool:
-    lowered = html.lower()
-    return "anomaly-modal" in lowered or "bots use duckduckgo too" in lowered
-
-
-def _clean_result_url(url: str) -> str:
-    parsed = urlparse(url)
-    if parsed.netloc.endswith("duckduckgo.com") and parsed.path.startswith("/l/"):
-        target = parse_qs(parsed.query).get("uddg", [url])[0]
-        return unquote(target)
-    return url
-
-
 def _canonical_result_key(url: str) -> str:
-    parsed = urlparse(_clean_result_url(url))
+    parsed = urlparse(clean_result_url(url))
     return f"{parsed.netloc.lower().removeprefix('www.')}{parsed.path.rstrip('/')}"
 
 
@@ -768,50 +653,3 @@ _STOPWORDS = {
     "would",
     "your",
 }
-
-
-class _ParsedResult:
-    def __init__(self) -> None:
-        self.title = ""
-        self.url = ""
-        self.snippet = ""
-
-
-class _DuckDuckGoParser(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__()
-        self.results: list[_ParsedResult] = []
-        self._current: _ParsedResult | None = None
-        self._capture: str | None = None
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        attributes = dict(attrs)
-        class_name = attributes.get("class", "")
-
-        if tag == "a" and ("result__a" in class_name or "result-link" in class_name):
-            self._current = _ParsedResult()
-            self._current.url = attributes.get("href", "") or ""
-            self._capture = "title"
-        elif self._current is not None and (
-            "result__snippet" in class_name or "result-snippet" in class_name
-        ):
-            self._capture = "snippet"
-
-    def handle_data(self, data: str) -> None:
-        if self._current is None or self._capture is None:
-            return
-
-        if self._capture == "title":
-            self._current.title += data
-        elif self._capture == "snippet":
-            self._current.snippet += data
-
-    def handle_endtag(self, tag: str) -> None:
-        if self._current is None:
-            return
-
-        if tag == "a" and self._capture == "title":
-            self.results.append(self._current)
-            self._capture = None
-        elif self._capture == "snippet":
-            self._capture = None

@@ -1,24 +1,18 @@
 import json
 import logging
 import re
-import tempfile
-from pathlib import Path
 from typing import Any
 
 import httpx
 import webvtt
-from faster_whisper import WhisperModel
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError
 
-from app.config import settings
-from app.models import CaptionResponse, CaptionSegment, CaptionSource
+from app.core.config import settings
+from app.integrations.captions.errors import CaptionError
+from app.schemas import CaptionSegment
 
 logger = logging.getLogger(__name__)
-
-
-class CaptionError(Exception):
-    pass
 
 
 def _cookie_options() -> dict[str, Any]:
@@ -33,55 +27,6 @@ def _cookie_options() -> dict[str, Any]:
     if settings.youtube_cookie_file:
         return {"cookiefile": settings.youtube_cookie_file}
     return {}
-
-
-def get_captions_for_url(url: str, language: str = "en") -> CaptionResponse:
-    logger.info("captions.start url=%s language=%s", url, language)
-    info = _extract_video_info(url)
-    title = info.get("title")
-    thumbnail_url = info.get("thumbnail")
-
-    caption_track = _select_caption_track(info, language)
-    if caption_track is not None:
-        logger.info(
-            "captions.youtube_track_found url=%s language=%s ext=%s",
-            url,
-            caption_track["language"],
-            caption_track.get("ext"),
-        )
-        try:
-            segments = _download_and_parse_caption_track(caption_track)
-        except CaptionError as error:
-            logger.info("captions.youtube_track_unusable url=%s error=%s", url, error)
-        else:
-            if segments:
-                logger.info("captions.youtube_ready url=%s segments=%d", url, len(segments))
-                return CaptionResponse(
-                    url=url,
-                    title=title,
-                    language=caption_track["language"],
-                    source=CaptionSource.youtube,
-                    text=_segments_to_text(segments),
-                    segments=segments,
-                    thumbnail_url=thumbnail_url,
-                )
-
-            logger.info("captions.youtube_track_empty url=%s", url)
-    else:
-        logger.info("captions.youtube_track_missing url=%s language=%s", url, language)
-
-    logger.info("captions.audio_fallback_needed url=%s", url)
-    segments = _transcribe_audio(url)
-    logger.info("captions.whisper_ready url=%s segments=%d", url, len(segments))
-    return CaptionResponse(
-        url=url,
-        title=title,
-        language=language,
-        source=CaptionSource.whisper,
-        text=_segments_to_text(segments),
-        segments=segments,
-        thumbnail_url=thumbnail_url,
-    )
 
 
 def _extract_video_info(url: str) -> dict[str, Any]:
@@ -220,71 +165,3 @@ def _timestamp_to_seconds(value: str) -> float:
         hours = int(hour_part)
 
     return hours * 3600 + int(minute_part) * 60 + float(second_part)
-
-
-def _transcribe_audio(url: str) -> list[CaptionSegment]:
-    logger.info("captions.audio_download_started url=%s", url)
-    with tempfile.TemporaryDirectory(prefix="defluff-audio-") as tmp_dir:
-        output_template = str(Path(tmp_dir) / "audio.%(ext)s")
-        options = {
-            "format": "bestaudio/best",
-            "noplaylist": True,
-            "outtmpl": output_template,
-            "postprocessors": [
-                {
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": "wav",
-                }
-            ],
-            "quiet": True,
-            **_cookie_options(),
-        }
-
-        try:
-            with YoutubeDL(options) as ydl:
-                ydl.download([url])
-        except DownloadError as error:
-            raise CaptionError(f"Could not download audio for transcription: {error}") from error
-
-        audio_path = Path(tmp_dir) / "audio.wav"
-        if not audio_path.exists():
-            raise CaptionError("yt-dlp did not produce an audio file")
-        logger.info("captions.audio_download_ready url=%s path=%s", url, audio_path)
-
-        model_kwargs: dict[str, str] = {}
-        if settings.whisper_compute_type != "default":
-            model_kwargs["compute_type"] = settings.whisper_compute_type
-
-        model = WhisperModel(
-            settings.whisper_model,
-            device=settings.whisper_device,
-            **model_kwargs,
-        )
-        logger.info(
-            "captions.whisper_transcribe_started url=%s model=%s device=%s",
-            url,
-            settings.whisper_model,
-            settings.whisper_device,
-        )
-        whisper_segments, _ = model.transcribe(str(audio_path), vad_filter=True)
-
-        return [
-            CaptionSegment(start=segment.start, end=segment.end, text=segment.text.strip())
-            for segment in whisper_segments
-            if segment.text.strip()
-        ]
-
-
-def _segments_to_text(segments: list[CaptionSegment]) -> str:
-    return "\n".join(
-        f"[{_format_seconds(segment.start)} -> {_format_seconds(segment.end)}] {segment.text}"
-        for segment in segments
-    )
-
-
-def _format_seconds(value: float) -> str:
-    total_seconds = int(value)
-    milliseconds = int((value - total_seconds) * 1000)
-    minutes, seconds = divmod(total_seconds, 60)
-    hours, minutes = divmod(minutes, 60)
-    return f"{hours:02}:{minutes:02}:{seconds:02}.{milliseconds:03}"

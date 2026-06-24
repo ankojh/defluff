@@ -21,8 +21,8 @@ import json
 import re
 from urllib.parse import parse_qs, urlparse
 
-from app.config import settings
-from app.models import ContentKind, ContentResponse, Highlight
+from app.core.config import settings
+from app.schemas import ContentKind, ContentResponse, Highlight
 
 
 def build_highlight_url(base: str, video_id: str, highlights: list[dict]) -> str:

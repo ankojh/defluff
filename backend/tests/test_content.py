@@ -2,8 +2,8 @@ from types import SimpleNamespace
 
 import httpx
 
-from app.content import _extract_pdf, _is_probably_pdf_url
-from app.models import ContentKind
+from app.content.pdf import _extract_pdf, _is_probably_pdf_url
+from app.schemas import ContentKind
 
 
 def test_pdf_url_detection_handles_query_strings() -> None:
@@ -33,8 +33,8 @@ def test_extract_pdf_returns_page_text(monkeypatch) -> None:
         def __init__(self, *args, **kwargs) -> None:
             pass
 
-    monkeypatch.setattr("app.content.httpx.get", fake_get)
-    monkeypatch.setattr("app.content.PdfReader", FakePdfReader)
+    monkeypatch.setattr("app.content.pdf.httpx.get", fake_get)
+    monkeypatch.setattr("app.content.pdf.PdfReader", FakePdfReader)
 
     response = _extract_pdf(url)
 

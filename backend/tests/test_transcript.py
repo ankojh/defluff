@@ -1,10 +1,10 @@
-from app.models import CaptionSegment
-from app.transcript import (
+from app.content.transcript import (
     caption_for_range,
     format_transcript_text,
     parse_timestamp_label,
     resolved_caption_range,
 )
+from app.schemas import CaptionSegment
 
 
 def test_caption_for_range_joins_selected_segments_verbatim() -> None:

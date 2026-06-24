@@ -1,0 +1,2 @@
+class CaptionError(Exception):
+    pass

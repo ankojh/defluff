@@ -3,11 +3,14 @@ from pathlib import Path
 
 import asyncpg
 
-from app.config import settings
+from app.core.config import settings
 
+# This module lives at app/db/session.py, so the bundled schema is two parents
+# up (backend/sql/schema.sql). cwd is checked first for the installed copy,
+# which runs from DEFLUFF_HOME.
 SCHEMA_PATHS = (
     Path.cwd() / "sql" / "schema.sql",
-    Path(__file__).resolve().parent.parent / "sql" / "schema.sql",
+    Path(__file__).resolve().parents[2] / "sql" / "schema.sql",
 )
 
 

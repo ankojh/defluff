@@ -1,8 +1,8 @@
 import pytest
 
-from app import captions
-from app.captions import CaptionError, get_captions_for_url
-from app.models import CaptionSegment, CaptionSource
+from app.integrations import captions
+from app.integrations.captions import CaptionError, get_captions_for_url
+from app.schemas import CaptionSegment, CaptionSource
 
 
 def test_get_captions_uses_youtube_track_without_audio(monkeypatch) -> None:

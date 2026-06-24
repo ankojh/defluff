@@ -1,5 +1,5 @@
-from app.consume import _enrich_timed_analysis, _make_highlights_exclusive
-from app.models import CaptionSegment, ConsumptionAnalysis, ContentKind, ContentResponse, Highlight
+from app.schemas import CaptionSegment, ConsumptionAnalysis, ContentKind, ContentResponse, Highlight
+from app.services.consume import _enrich_timed_analysis, _make_highlights_exclusive
 
 
 def _video(segments_end: float = 200.0) -> ContentResponse:

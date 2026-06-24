@@ -2,9 +2,9 @@ import base64
 import gzip
 import json
 
-from app.config import settings
-from app.highlight_url import build_highlight_url, highlight_player_url, youtube_video_id
-from app.models import ContentKind, ContentResponse, Highlight
+from app.core.config import settings
+from app.schemas import ContentKind, ContentResponse, Highlight
+from app.services.highlight_url import build_highlight_url, highlight_player_url, youtube_video_id
 
 
 def _decode(url: str) -> dict:

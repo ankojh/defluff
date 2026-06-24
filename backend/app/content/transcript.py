@@ -4,30 +4,16 @@ from __future__ import annotations
 
 import re
 
-from app.models import CaptionSegment
+from app.schemas import CaptionSegment
+from app.utils.timestamps import parse_timestamp_label
 
-
-def parse_timestamp_label(value: str | None) -> float | None:
-    if not value:
-        return None
-
-    parts = value.strip().split(":")
-    if not 1 <= len(parts) <= 3:
-        return None
-
-    try:
-        numbers = [float(part) for part in parts]
-    except ValueError:
-        return None
-
-    if len(numbers) == 1:
-        return numbers[0]
-    if len(numbers) == 2:
-        minutes, seconds = numbers
-        return minutes * 60 + seconds
-
-    hours, minutes, seconds = numbers
-    return hours * 3600 + minutes * 60 + seconds
+__all__ = [
+    "caption_for_range",
+    "format_transcript_text",
+    "parse_timestamp_label",
+    "re_split_sentences",
+    "resolved_caption_range",
+]
 
 
 def resolved_caption_range(

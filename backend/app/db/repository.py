@@ -1,17 +1,27 @@
-from app.db import database
-from app.models import ContentResponse, KnowledgeMatch, LearnRequest
+"""SQL access for URL submissions and the personal knowledge store."""
+
+from app.db.session import database
+from app.schemas import KnowledgeMatch, LearnRequest, UrlRecord, UrlStatus
 
 
-async def find_related_knowledge(content: ContentResponse, limit: int = 5) -> list[KnowledgeMatch]:
-    """Find learned knowledge items relevant to the content being consumed.
-
-    Matches are fed to the summary as prior knowledge so already-known material
-    can be compressed rather than re-explained.
+async def create_url_submission(url: str) -> UrlRecord:
+    query = """
+        insert into url_submissions (url, status)
+        values ($1, $2)
+        returning id, url, status, created_at, updated_at
     """
-    search_text = _search_text_for(content)
-    if not search_text.strip():
-        return []
 
+    async for connection in database.connection():
+        row = await connection.fetchrow(query, url, UrlStatus.pending.value)
+        if row is None:
+            raise RuntimeError("Failed to create URL submission")
+        return UrlRecord(**dict(row))
+
+    raise RuntimeError("Database connection was not available")
+
+
+async def find_knowledge_matches(search_text: str, limit: int = 5) -> list[KnowledgeMatch]:
+    """Full-text search learned knowledge items relevant to ``search_text``."""
     query = """
         select
             id,
@@ -78,11 +88,3 @@ async def clear_knowledge() -> int:
         except (ValueError, IndexError):
             return 0
     raise RuntimeError("Database connection was not available")
-
-
-def _search_text_for(content: ContentResponse) -> str:
-    if content.title:
-        return content.title
-
-    words = content.text.split()
-    return " ".join(words[:16])

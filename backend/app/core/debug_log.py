@@ -5,7 +5,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
+# This module lives at app/core/debug_log.py, so the repo root (holding .logs/)
+# is four parents up.
+ROOT_DIR = Path(__file__).resolve().parents[3]
 LOG_DIR = ROOT_DIR / ".logs"
 DEBUG_LOG_PATH = LOG_DIR / "debug-session.log"
 MAX_FIELD_CHARS = 30000

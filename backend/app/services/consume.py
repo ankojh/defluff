@@ -5,10 +5,11 @@ from typing import TypeVar
 
 from starlette.concurrency import run_in_threadpool
 
+from app.agents import LocalOllamaConsumptionAgent, LocalOllamaResearchPlanner
 from app.content import get_content_for_url
-from app.highlight_url import highlight_player_url
-from app.knowledge import find_related_knowledge
-from app.models import (
+from app.content.transcript import caption_for_range, resolved_caption_range
+from app.integrations.ollama import preload_model
+from app.schemas import (
     AgentTrace,
     Chapter,
     ConsumeStreamEvent,
@@ -19,19 +20,15 @@ from app.models import (
     ResearchResult,
     ResearchTopic,
 )
-from app.ollama_agent import (
-    LocalOllamaConsumptionAgent,
-    LocalOllamaResearchPlanner,
-    preload_model,
-    timestamp_label,
-)
-from app.research import (
+from app.services.highlight_url import highlight_player_url
+from app.services.knowledge import find_related_knowledge
+from app.services.research import (
     fetch_research_documents,
     fallback_research_topics_for_content,
     research_content,
     research_provider_description,
 )
-from app.transcript import caption_for_range, resolved_caption_range
+from app.utils.timestamps import format_timestamp
 
 T = TypeVar("T")
 logger = logging.getLogger(__name__)
@@ -590,7 +587,7 @@ def _enrich_chapter(content: ContentResponse, chapter: Chapter) -> Chapter:
 def _timestamp_or_none(value: float | None) -> str | None:
     if value is None:
         return None
-    return timestamp_label(value)
+    return format_timestamp(value)
 
 
 def _timed_item_sort_key(item: Highlight | Chapter) -> tuple[int, float, str]:

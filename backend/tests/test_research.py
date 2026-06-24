@@ -1,11 +1,8 @@
-from app.models import Chapter, ContentKind, ContentResponse, Highlight
-from app.ollama_agent import (
-    _parse_analysis,
-    _parse_research_topics,
-    _parse_text_segments,
-    _research_planning_prompt,
-)
-from app.research import _parse_duckduckgo_html, research_queries_for_content
+from app.agents.parsing import _parse_analysis, _parse_research_topics, _parse_text_segments
+from app.agents.prompts.research import research_planning_prompt
+from app.integrations.search.duckduckgo import _parse_duckduckgo_html
+from app.schemas import Chapter, ContentKind, ContentResponse, Highlight
+from app.services.research import research_queries_for_content
 
 
 def test_parse_text_segments_returns_untimed_chapters_and_highlights() -> None:
@@ -52,7 +49,7 @@ def test_research_planning_prompt_grounds_in_chapters_and_highlights() -> None:
         )
     ]
 
-    prompt = _research_planning_prompt(content, chapters, highlights, max_topics=6)
+    prompt = research_planning_prompt(content, chapters, highlights, max_topics=6)
 
     assert "OLED tail lights" in prompt
     assert "diesel mild-hybrid drivetrain" in prompt
@@ -61,7 +58,7 @@ def test_research_planning_prompt_grounds_in_chapters_and_highlights() -> None:
 
 
 def test_overall_prompt_defines_key_takeaways() -> None:
-    from app.ollama_agent import _overall_analysis_prompt
+    from app.agents.prompts.consumption import overall_analysis_prompt
 
     content = ContentResponse(
         url="https://example.com/v",
@@ -72,7 +69,7 @@ def test_overall_prompt_defines_key_takeaways() -> None:
         segments=[],
     )
 
-    prompt = _overall_analysis_prompt(content, [], [], [], [])
+    prompt = overall_analysis_prompt(content, [], [], [], [])
 
     assert "key takeaways" in prompt
     assert "7 auth methods" in prompt

@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.models import UrlSubmission
+from app.schemas import UrlSubmission
 
 
 def test_url_submission_accepts_http_urls() -> None:
