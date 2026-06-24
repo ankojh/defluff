@@ -131,14 +131,6 @@ class TermExplanation(BaseModel):
     explanation: str
 
 
-class VisualAid(BaseModel):
-    title: str
-    explanation: str
-    image_url: str | None = None
-    image_alt: str | None = None
-    suggested_diagram: str | None = None
-
-
 class ResearchResult(BaseModel):
     title: str
     url: str
@@ -199,7 +191,6 @@ class ConsumptionAnalysis(BaseModel):
     reading_flow: list[str] = Field(default_factory=list)
     context_helpers: list[str] = Field(default_factory=list)
     glossary: list[TermExplanation] = Field(default_factory=list)
-    visual_aids: list[VisualAid] = Field(default_factory=list)
     research_context: list[str] = Field(default_factory=list)
     research_highlights: list[ResearchHighlight] = Field(default_factory=list)
     deep_dive_questions: list[str] = Field(default_factory=list)
@@ -224,6 +215,9 @@ class ConsumeResponse(BaseModel):
     research_documents: list[ResearchDocument] = Field(default_factory=list)
     knowledge_matches: list[KnowledgeMatch] = Field(default_factory=list)
     agent_traces: list[AgentTrace] = Field(default_factory=list)
+    # Shareable "defluff-yt" highlight-player link for YouTube sources with timed
+    # highlights; None otherwise. See app.highlight_url.
+    highlight_url: str | None = None
 
 
 class ConsumeStreamEvent(BaseModel):

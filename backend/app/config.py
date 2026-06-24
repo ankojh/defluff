@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     # file to authenticate. Browser cookies take precedence; empty = disabled.
     youtube_cookies_from_browser: str = ""
     youtube_cookie_file: str = ""
+    # Base URL of the standalone "defluff-yt" highlight player. The backend only
+    # produces share links (<base>/#d=<token>); the player is static and decodes
+    # the payload from the URL hash. Override via DEFLUFF_YT_BASE for local dev,
+    # e.g. "http://localhost:5173".
+    defluff_yt_base: str = "https://defluff.ankojh.com"
 
     @property
     def ollama_keep_alive_value(self) -> int | str:

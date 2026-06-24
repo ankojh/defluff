@@ -2,9 +2,36 @@ from app.models import Chapter, ContentKind, ContentResponse, Highlight
 from app.ollama_agent import (
     _parse_analysis,
     _parse_research_topics,
+    _parse_text_segments,
     _research_planning_prompt,
 )
 from app.research import _parse_duckduckgo_html, research_queries_for_content
+
+
+def test_parse_text_segments_returns_untimed_chapters_and_highlights() -> None:
+    raw = """
+    {
+      "chapters": [
+        {"title": "The problem", "summary": "Why current auth is painful."},
+        {"title": "The fix", "summary": "How passkeys remove passwords."}
+      ],
+      "highlights": [
+        {"text": "Passkeys replace shared secrets", "summary": "No password to phish.", "why": "Core claim."},
+        {"text": "Sync vs device-bound", "summary": "Tradeoffs differ.", "why": "Practical choice."}
+      ]
+    }
+    """
+
+    chapters, highlights = _parse_text_segments(raw)
+
+    assert [chapter.title for chapter in chapters] == ["The problem", "The fix"]
+    assert [highlight.text for highlight in highlights] == [
+        "Passkeys replace shared secrets",
+        "Sync vs device-bound",
+    ]
+    # Articles have no timeline — chapters/highlights must carry no timestamps.
+    assert all(chapter.start is None and chapter.timestamp is None for chapter in chapters)
+    assert all(highlight.start is None and highlight.timestamp is None for highlight in highlights)
 
 
 def test_research_planning_prompt_grounds_in_chapters_and_highlights() -> None:
@@ -114,15 +141,6 @@ def test_parse_analysis_includes_consumption_helpers() -> None:
       "glossary": [
         {"term": "RAG", "explanation": "Retrieval plus generation."}
       ],
-      "visual_aids": [
-        {
-          "title": "Pipeline diagram",
-          "explanation": "Shows how retrieval feeds the answer.",
-          "image_url": null,
-          "image_alt": null,
-          "suggested_diagram": "Query -> retrieve -> rerank -> answer"
-        }
-      ],
       "research_context": ["External docs explain why reranking changes result quality."],
       "research_highlights": [
         {
@@ -145,7 +163,6 @@ def test_parse_analysis_includes_consumption_helpers() -> None:
     assert analysis.tldr == "The core takeaway."
     assert analysis.reading_flow == ["Start with the problem.", "Then read the tradeoff."]
     assert analysis.glossary[0].term == "RAG"
-    assert analysis.visual_aids[0].suggested_diagram == "Query -> retrieve -> rerank -> answer"
     assert analysis.research_context == [
         "External docs explain why reranking changes result quality."
     ]

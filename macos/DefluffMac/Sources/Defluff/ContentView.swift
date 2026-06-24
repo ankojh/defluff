@@ -628,19 +628,21 @@ struct ContentView: View {
             if !analysis.glossary.isEmpty {
                 glossarySection(analysis.glossary)
             }
-            visualAidsSection(analysis.visualAids)
 
-            // Navigate the source.
-            if !analysis.chapters.isEmpty {
-                chaptersSection(
-                    analysis.chapters,
-                    sourceURL: response.content.url,
-                    sourceTitle: response.content.title
-                )
-            }
+            // Navigate the source — highlights first, then chapters.
             if !analysis.highlights.isEmpty {
                 highlightsSection(
                     analysis.highlights,
+                    sourceURL: response.content.url,
+                    sourceTitle: response.content.title
+                )
+                if let shareURL = response.highlightURL, let url = URL(string: shareURL) {
+                    shareHighlightReelLink(url)
+                }
+            }
+            if !analysis.chapters.isEmpty {
+                chaptersSection(
+                    analysis.chapters,
                     sourceURL: response.content.url,
                     sourceTitle: response.content.title
                 )
@@ -745,47 +747,6 @@ struct ContentView: View {
     }
 
     @ViewBuilder
-    private func visualAidsSection(_ aids: [VisualAid]) -> some View {
-        if !aids.isEmpty {
-            VStack(alignment: .leading, spacing: 12) {
-                subheading("Visual aids")
-                ForEach(aids) { aid in
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(aid.title)
-                            .font(Theme.serif(15, weight: .semibold))
-                            .foregroundStyle(Theme.ink)
-                        Text(aid.explanation)
-                            .font(Theme.serif(14))
-                            .foregroundStyle(Theme.inkSoft)
-                            .textSelection(.enabled)
-
-                        if let urlString = aid.imageURL, let url = URL(string: urlString) {
-                            AsyncImage(url: url) { image in
-                                image.resizable().aspectRatio(contentMode: .fit)
-                            } placeholder: {
-                                ProgressView().controlSize(.small)
-                            }
-                            .frame(maxWidth: 440, maxHeight: 300)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.hairline, lineWidth: 1))
-                        } else if let diagram = aid.suggestedDiagram {
-                            Text(diagram)
-                                .font(Theme.serifItalic(13))
-                                .foregroundStyle(Theme.inkFaint)
-                                .padding(10)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(Theme.paper)
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
-                                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.hairline, lineWidth: 1))
-                        }
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    @ViewBuilder
     private func researchSection(_ response: ConsumeResponse) -> some View {
         let analysis = response.analysis
         let hasResearch = !analysis.researchContext.isEmpty
@@ -860,20 +821,19 @@ struct ContentView: View {
                 if !analysis.glossary.isEmpty {
                     glossarySection(analysis.glossary)
                 }
-                visualAidsSection(analysis.visualAids)
-            }
-
-            if !streamedChapters.isEmpty {
-                chaptersSection(
-                    streamedChapters,
-                    sourceURL: streamedContent?.url ?? "",
-                    sourceTitle: streamedContent?.title
-                )
             }
 
             if !streamedHighlights.isEmpty {
                 highlightsSection(
                     streamedHighlights,
+                    sourceURL: streamedContent?.url ?? "",
+                    sourceTitle: streamedContent?.title
+                )
+            }
+
+            if !streamedChapters.isEmpty {
+                chaptersSection(
+                    streamedChapters,
                     sourceURL: streamedContent?.url ?? "",
                     sourceTitle: streamedContent?.title
                 )
@@ -1233,6 +1193,19 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    /// Link to the standalone player that plays just the highlight ranges
+    /// back-to-back. The whole reel is encoded in the URL — nothing is stored.
+    private func shareHighlightReelLink(_ url: URL) -> some View {
+        Link(destination: url) {
+            HStack(spacing: 5) {
+                Image(systemName: "play.rectangle.on.rectangle")
+                Text("Play highlight reel")
+            }
+            .font(Theme.text(12, weight: .semibold))
+        }
+        .foregroundStyle(Theme.accent)
+    }
+
     private func chaptersSection(_ chapters: [Chapter], sourceURL: String, sourceTitle: String?) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             heading("Chapters")
@@ -1378,16 +1351,23 @@ struct ContentView: View {
         }
     }
 
+    // Sort timed items by start; keep original (reading) order for untimed
+    // items like articles, where every start is nil. The index tiebreaker keeps
+    // the sort stable so nil-start items aren't scrambled.
     private func orderedHighlights(_ highlights: [Highlight]) -> [Highlight] {
-        highlights.sorted {
-            ($0.start ?? .greatestFiniteMagnitude) < ($1.start ?? .greatestFiniteMagnitude)
-        }
+        highlights.enumerated().sorted {
+            let a = $0.element.start ?? .greatestFiniteMagnitude
+            let b = $1.element.start ?? .greatestFiniteMagnitude
+            return a != b ? a < b : $0.offset < $1.offset
+        }.map(\.element)
     }
 
     private func orderedChapters(_ chapters: [Chapter]) -> [Chapter] {
-        chapters.sorted {
-            ($0.start ?? .greatestFiniteMagnitude) < ($1.start ?? .greatestFiniteMagnitude)
-        }
+        chapters.enumerated().sorted {
+            let a = $0.element.start ?? .greatestFiniteMagnitude
+            let b = $1.element.start ?? .greatestFiniteMagnitude
+            return a != b ? a < b : $0.offset < $1.offset
+        }.map(\.element)
     }
 
     private func researchLinksSection(_ documents: [ResearchDocument]) -> some View {

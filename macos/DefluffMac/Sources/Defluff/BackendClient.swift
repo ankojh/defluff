@@ -71,6 +71,9 @@ struct ConsumeResponse: Decodable {
     let researchDocuments: [ResearchDocument]
     let knowledgeMatches: [KnowledgeMatch]
     let agentTraces: [AgentTrace]
+    /// Shareable highlight-player link for YouTube sources with timed
+    /// highlights; nil otherwise.
+    let highlightURL: String?
 
     private enum CodingKeys: String, CodingKey {
         case content
@@ -79,6 +82,7 @@ struct ConsumeResponse: Decodable {
         case researchDocuments = "research_documents"
         case knowledgeMatches = "knowledge_matches"
         case agentTraces = "agent_traces"
+        case highlightURL = "highlight_url"
     }
 }
 
@@ -102,7 +106,6 @@ struct ConsumptionAnalysis: Decodable {
     let readingFlow: [String]
     let contextHelpers: [String]
     let glossary: [TermExplanation]
-    let visualAids: [VisualAid]
     let researchContext: [String]
     let researchHighlights: [ResearchHighlight]
     let deepDiveQuestions: [String]
@@ -120,7 +123,6 @@ struct ConsumptionAnalysis: Decodable {
         case readingFlow = "reading_flow"
         case contextHelpers = "context_helpers"
         case glossary
-        case visualAids = "visual_aids"
         case researchContext = "research_context"
         case researchHighlights = "research_highlights"
         case deepDiveQuestions = "deep_dive_questions"
@@ -156,26 +158,6 @@ struct TermExplanation: Decodable, Identifiable {
 
     var id: String {
         term
-    }
-}
-
-struct VisualAid: Decodable, Identifiable {
-    let title: String
-    let explanation: String
-    let imageURL: String?
-    let imageAlt: String?
-    let suggestedDiagram: String?
-
-    private enum CodingKeys: String, CodingKey {
-        case title
-        case explanation
-        case imageURL = "image_url"
-        case imageAlt = "image_alt"
-        case suggestedDiagram = "suggested_diagram"
-    }
-
-    var id: String {
-        imageURL ?? suggestedDiagram ?? title
     }
 }
 

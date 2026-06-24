@@ -6,6 +6,7 @@ from typing import TypeVar
 from starlette.concurrency import run_in_threadpool
 
 from app.content import get_content_for_url
+from app.highlight_url import highlight_player_url
 from app.knowledge import find_related_knowledge
 from app.models import (
     AgentTrace,
@@ -257,7 +258,6 @@ async def consume_url(
                         f"{len(analysis.reading_flow)} flow steps",
                         f"{len(analysis.context_helpers)} context helpers",
                         f"{len(analysis.glossary)} terms explained",
-                        f"{len(analysis.visual_aids)} visual aids",
                         f"{len(analysis.research_context)} research context notes",
                         f"{len(analysis.research_highlights)} research highlights",
                         f"{len(analysis.deep_dive_questions)} deep-dive prompts",
@@ -348,7 +348,6 @@ async def consume_url(
                         f"{len(analysis.reading_flow)} flow steps",
                         f"{len(analysis.context_helpers)} context helpers",
                         f"{len(analysis.glossary)} terms explained",
-                        f"{len(analysis.visual_aids)} visual aids",
                         f"{len(analysis.research_context)} research context notes",
                         f"{len(analysis.research_highlights)} research highlights",
                         f"{len(analysis.deep_dive_questions)} deep-dive prompts",
@@ -360,6 +359,11 @@ async def consume_url(
                 ],
             )
         )
+    # For YouTube sources, build a shareable highlight-player link from the
+    # timestamped highlights (no-op / None for articles, PDFs, or untimed reels).
+    highlight_url = highlight_player_url(content, analysis.highlights)
+    if highlight_url is not None:
+        logger.info("consume.highlight_url url=%s chars=%d", url, len(highlight_url))
     return ConsumeResponse(
         content=content,
         analysis=analysis,
@@ -367,6 +371,7 @@ async def consume_url(
         research_documents=research_documents,
         knowledge_matches=knowledge_matches,
         agent_traces=agent_traces,
+        highlight_url=highlight_url,
     )
 
 
@@ -471,6 +476,11 @@ def _enrich_timed_analysis(
     highlights = sorted(analysis.highlights, key=_timed_item_sort_key)
     chapters = sorted(analysis.chapters, key=_timed_item_sort_key)
     enriched_highlights = [_enrich_highlight(content, highlight) for highlight in highlights]
+    # Re-sort after enrichment (caption snapping can nudge start times) so the
+    # overlap pass sees ranges in start order.
+    enriched_highlights = _make_highlights_exclusive(
+        content, sorted(enriched_highlights, key=_timed_item_sort_key)
+    )
     enriched_chapters = [_enrich_chapter(content, chapter) for chapter in chapters]
     return analysis.model_copy(
         update={
@@ -478,6 +488,51 @@ def _enrich_timed_analysis(
             "chapters": enriched_chapters,
         }
     )
+
+
+def _make_highlights_exclusive(
+    content: ContentResponse,
+    highlights: list[Highlight],
+) -> list[Highlight]:
+    """Trim timed highlights so their [start, end] ranges never overlap.
+
+    Highlights arrive sorted by start. When one starts before the previous one
+    ends, its start is pushed forward to that end so the ranges abut instead of
+    conflicting (the player seeks back-to-back, and overlapping ranges would
+    replay the same moment). A highlight fully swallowed by an earlier one is
+    dropped. The caption is re-derived for any trimmed range so the shown text
+    stays inside the new bounds. Untimed highlights pass through untouched.
+    """
+    result: list[Highlight] = []
+    last_end: float | None = None
+    for highlight in highlights:
+        start, end = highlight.start, highlight.end
+        if start is None or end is None or end <= start:
+            result.append(highlight)
+            continue
+
+        if last_end is not None and start < last_end:
+            start = last_end
+        if start >= end:
+            logger.info(
+                "consume.highlight_dropped_overlap url=%s text=%r", content.url, highlight.text
+            )
+            continue
+
+        if start != highlight.start:
+            timestamp = _timestamp_or_none(start)
+            highlight = highlight.model_copy(
+                update={
+                    "start": start,
+                    "timestamp": timestamp,
+                    "caption": caption_for_range(
+                        content.segments, start, end, timestamp, highlight.end_timestamp
+                    ),
+                }
+            )
+        result.append(highlight)
+        last_end = end
+    return result
 
 
 def _enrich_highlight(content: ContentResponse, highlight: Highlight) -> Highlight:

@@ -77,6 +77,11 @@ class LocalOllamaConsumptionAgent:
         concrete claims and entities these surface. Each chapter and highlight
         is streamed as soon as it is ready.
         """
+        # Sources without a timeline (articles, PDFs) have no transcript to
+        # segment, so split the text instead and pull untimed highlights.
+        if not content.segments:
+            return await self._segment_and_highlight_text(content, on_chapter, on_highlight)
+
         chapters = await self._chapters_for_content(content)
         chapter_highlights: list[Highlight] = []
         enriched_chapters: list[Chapter] = []
@@ -121,6 +126,58 @@ class LocalOllamaConsumptionAgent:
                     await on_highlight(highlight)
 
         return enriched_chapters, chapter_highlights
+
+    async def _segment_and_highlight_text(
+        self,
+        content: ContentResponse,
+        on_chapter: Callable[[Chapter], Awaitable[None]] | None,
+        on_highlight: Callable[[Highlight], Awaitable[None]] | None,
+    ) -> tuple[list[Chapter], list[Highlight]]:
+        """Phase one for sources without a timeline (articles, PDFs).
+
+        Splits the body into sequential chapters and pulls revisit highlights in
+        a single call. The results carry no timestamps, so they render in the UI
+        without time badges.
+        """
+        prompt = _text_segmentation_prompt(content)
+        logger.info(
+            "ollama.text_segmentation_request model=%s prompt_chars=%d url=%s",
+            settings.ollama_model,
+            len(prompt),
+            content.url,
+        )
+        try:
+            raw, thinking = await _chat_json(
+                self.client,
+                system=(
+                    "You split written documents into sequential sections and pick the "
+                    "points worth revisiting. Return strict JSON only."
+                ),
+                prompt=prompt,
+                num_predict=settings.analysis_num_predict,
+                temperature=0.15,
+                purpose="text segmentation",
+                think=False,
+            )
+            self.last_thinking += thinking
+            chapters, highlights = _parse_text_segments(raw)
+        except AnalysisError as error:
+            logger.info("ollama.text_segmentation_failed url=%s error=%s", content.url, error)
+            return [], []
+
+        logger.info(
+            "ollama.text_segments_ready url=%s chapters=%d highlights=%d",
+            content.url,
+            len(chapters),
+            len(highlights),
+        )
+        for chapter in chapters:
+            if on_chapter is not None:
+                await on_chapter(chapter)
+        for highlight in highlights:
+            if on_highlight is not None:
+                await on_highlight(highlight)
+        return chapters, highlights
 
     async def summarize(
         self,
@@ -469,6 +526,42 @@ def _chapter_segmentation_prompt(content: ContentResponse) -> str:
     )
 
 
+def _text_segmentation_prompt(content: ContentResponse) -> str:
+    payload = {
+        "url": content.url,
+        "title": content.title,
+        "kind": content.kind,
+        "language": content.language,
+        "body": _content_body_for_prompt(content),
+    }
+
+    return (
+        "Split this written document into sequential topic chapters and pick the highlights "
+        "worth revisiting. The document has no timeline, so do not invent timestamps.\n"
+        "Cover the document in order, starting a new chapter when the topic, argument, or focus "
+        "changes. Do not create tiny chapters for navigation, ads, or boilerplate.\n"
+        "Highlights are the key revisit points across the whole document: claims, decisions, "
+        "definitions, examples, warnings, or technical details. Keep them distinct and in "
+        "reading order; do not repeat the same point.\n"
+        "Return exactly this JSON shape:\n"
+        "{\n"
+        '  "chapters": [\n'
+        '    {"title": "short topic title", "summary": "2 to 4 dense sentences on this section"}\n'
+        "  ],\n"
+        '  "highlights": [\n'
+        "    {\n"
+        '      "text": "10 to 20 word label for this point, paraphrased",\n'
+        '      "summary": "2 to 4 dense sentences explaining the full point",\n'
+        '      "why": "one sentence explaining why this point is worth revisiting"\n'
+        "    }\n"
+        "  ]\n"
+        "}\n"
+        "Prefer 3 to 8 chapters and 4 to 10 highlights for a typical article, fewer for short "
+        "pieces. Paraphrase in your own words; do not copy long verbatim passages.\n\n"
+        f"INPUT:\n{json.dumps(payload, ensure_ascii=False)}"
+    )
+
+
 def _chapter_analysis_prompt(
     content: ContentResponse,
     chapter: Chapter,
@@ -547,7 +640,6 @@ def _overall_analysis_prompt(
             "source": content.source,
             "language": content.language,
             "body": _content_body_for_prompt(content) if not content.segments else None,
-            "available_images": _content_images_for_prompt(content),
         },
         "chapters": [
             {
@@ -589,15 +681,6 @@ def _overall_analysis_prompt(
         '  "glossary": [\n'
         '    {"term": "jargon or acronym", "explanation": "simple explanation, max 160 characters"}\n'
         "  ],\n"
-        '  "visual_aids": [\n'
-        "    {\n"
-        '      "title": "image or diagram helper",\n'
-        '      "explanation": "how this visual helps, max 180 characters",\n'
-        '      "image_url": "use an available image URL when relevant, otherwise null",\n'
-        '      "image_alt": "available image alt text when relevant, otherwise null",\n'
-        '      "suggested_diagram": "diagram description, max 200 characters, otherwise null"\n'
-        "    }\n"
-        "  ],\n"
         '  "research_context": ["context from research_documents that makes the source easier to understand"],\n'
         '  "research_highlights": [\n'
         "    {\n"
@@ -622,8 +705,7 @@ def _overall_analysis_prompt(
         "definitions, methods, claims, or decisions the viewer should retain. Include 4 to 12 "
         "key_points depending on the source structure; preserve exact counts when the source is "
         "organized around a named number of items. "
-        "Use 5 to 10 summary_points when the source is substantial. For visual_aids, only use "
-        "image_url values from content.available_images, and include at most 2. For glossary, "
+        "Use 5 to 10 summary_points when the source is substantial. For glossary, "
         "include 2 to 6 terms only when jargon or assumed background appears. For research_context, "
         "include 2 to 6 notes. For research_highlights, include 2 to 5 items tied to URLs. "
         "For deep_dive_questions, include 3 to 6 concrete next questions.\n\n"
@@ -776,19 +858,6 @@ def _content_end_seconds(content: ContentResponse) -> float | None:
     return max(segment.end for segment in content.segments)
 
 
-def _content_images_for_prompt(content: ContentResponse) -> list[dict[str, str | None]]:
-    images = []
-    for media in content.media[:8]:
-        images.append(
-            {
-                "url": media.url,
-                "alt": media.alt,
-                "caption": media.caption,
-            }
-        )
-    return images
-
-
 def _research_documents_for_prompt(
     research_documents: list[ResearchDocument],
 ) -> list[dict[str, object]]:
@@ -906,7 +975,6 @@ def _parse_analysis(raw: str) -> ConsumptionAnalysis:
     ):
         data[key] = _string_list(data.get(key))
     data["glossary"] = _term_explanations(data.get("glossary"))
-    data["visual_aids"] = _visual_aids(data.get("visual_aids"))
     data["research_highlights"] = _research_highlights(data.get("research_highlights"))
 
     highlights = data.get("highlights")
@@ -948,6 +1016,34 @@ def _parse_chapters(raw: str) -> list[Chapter]:
         if isinstance(item, dict) and _string_or_default(item.get("title"), "")
     ]
     return _dedupe_ordered_chapters(parsed)
+
+
+def _parse_text_segments(raw: str) -> tuple[list[Chapter], list[Highlight]]:
+    """Parse the single-call chapters + highlights for timeline-free sources."""
+    data = _load_ollama_json(raw, purpose="text segmentation")
+
+    if not isinstance(data, dict):
+        raise AnalysisError("Ollama text segmentation JSON response was not an object")
+
+    raw_chapters = data.get("chapters")
+    chapters: list[Chapter] = []
+    if isinstance(raw_chapters, list):
+        chapters = [
+            Chapter.model_validate(_chapter_item(item))
+            for item in raw_chapters
+            if isinstance(item, dict) and _string_or_default(item.get("title"), "")
+        ]
+
+    raw_highlights = data.get("highlights")
+    highlights: list[Highlight] = []
+    if isinstance(raw_highlights, list):
+        highlights = [
+            Highlight.model_validate(_highlight_item(item))
+            for item in raw_highlights
+            if isinstance(item, dict) and _string_or_default(item.get("text"), "")
+        ]
+
+    return chapters, highlights
 
 
 def _parse_chapter_analysis(raw: str, chapter: Chapter) -> ChapterAnalysis:
@@ -1354,33 +1450,6 @@ def _term_explanations(value: object) -> list[dict[str, str]]:
             terms.append({"term": term, "explanation": explanation})
 
     return terms
-
-
-def _visual_aids(value: object) -> list[dict[str, str | None]]:
-    if not isinstance(value, list):
-        return []
-
-    aids: list[dict[str, str | None]] = []
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-
-        title = _string_or_default(item.get("title"), "")
-        explanation = _string_or_default(item.get("explanation"), "")
-        if not title or not explanation:
-            continue
-
-        aids.append(
-            {
-                "title": title,
-                "explanation": explanation,
-                "image_url": _string_or_none(item.get("image_url")),
-                "image_alt": _string_or_none(item.get("image_alt")),
-                "suggested_diagram": _string_or_none(item.get("suggested_diagram")),
-            }
-        )
-
-    return aids
 
 
 def _research_highlights(value: object) -> list[dict[str, str]]:
