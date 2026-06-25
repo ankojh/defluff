@@ -6,11 +6,13 @@ from typing import TypeVar
 from starlette.concurrency import run_in_threadpool
 
 from app.agents import LocalOllamaConsumptionAgent, LocalOllamaResearchPlanner
+from app.agents.base import OllamaUsage
 from app.content import get_content_for_url
 from app.content.transcript import caption_for_range, resolved_caption_range
 from app.integrations.ollama import preload_model
 from app.schemas import (
     AgentTrace,
+    AuditReport,
     Chapter,
     ConsumeStreamEvent,
     ConsumeResponse,
@@ -103,6 +105,7 @@ async def consume_url(
     )
     await _emit_event(analysis_progress, ConsumeStreamEvent(type="content", content=content))
 
+    local_model_usage: list[OllamaUsage] = []
     await _emit(
         progress,
         AgentTrace(
@@ -158,6 +161,7 @@ async def consume_url(
         progress,
         chapters=chapters,
         highlights=highlights,
+        local_model_usage=local_model_usage,
     )
     research_task = (
         asyncio.create_task(research_content(content, research_topics, progress=progress))
@@ -224,13 +228,48 @@ async def consume_url(
                 ],
             ),
         )
+
+        async def emit_audit_progress(
+            status: str,
+            summary: str,
+            details: list[str],
+        ) -> None:
+            if status == "running":
+                await _emit_event(
+                    analysis_progress,
+                    ConsumeStreamEvent(type="audit", message="running"),
+                )
+            elif status == "complete":
+                await _emit_event(
+                    analysis_progress,
+                    ConsumeStreamEvent(type="audit", message="complete"),
+                )
+            await _emit(
+                progress,
+                AgentTrace(
+                    name="Audit Loop",
+                    status=status,
+                    summary=summary,
+                    details=details,
+                ),
+            )
+
+        async def emit_analysis_update(update: ConsumptionAnalysis) -> None:
+            await _emit_event(
+                analysis_progress,
+                ConsumeStreamEvent(type="analysis", analysis=update),
+            )
+
         analysis = await analysis_agent.summarize(
             content,
             knowledge_matches,
             research_documents,
             chapters,
             highlights,
+            audit_progress=emit_audit_progress,
+            analysis_update=emit_analysis_update,
         )
+        local_model_usage.extend(analysis_agent.usage)
         analysis = _enrich_timed_analysis(content, analysis)
         logger.info(
             "consume.analysis_ready url=%s summary_chars=%d key_points=%d highlights=%d chapters=%d research_highlights=%d",
@@ -261,18 +300,16 @@ async def consume_url(
                         f"{len(analysis.key_points)} key points",
                         f"{len(analysis.highlights)} highlights",
                         f"{len(analysis.chapters)} chapters",
+                        *_local_model_usage_detail_lines(
+                            local_model_usage,
+                            audit_report=analysis.audit_report,
+                        ),
                     )
                     if detail
                 ],
             ),
         )
-        await _emit_event(
-            analysis_progress,
-            ConsumeStreamEvent(
-                type="analysis",
-                analysis=analysis.model_copy(update={"highlights": [], "chapters": []}),
-            ),
-        )
+        await _emit_event(analysis_progress, ConsumeStreamEvent(type="audit", message="complete"))
     else:
         analysis = ConsumptionAnalysis(summary="")
         logger.info("consume.analysis_skipped url=%s", url)
@@ -356,6 +393,29 @@ async def consume_url(
                 ],
             )
         )
+        if analysis.audit_report is not None:
+            agent_traces.append(
+                AgentTrace(
+                    name="Audit Loop",
+                    status="complete",
+                    summary=f"Audit score {analysis.audit_report.final_score:.1f}; {analysis.audit_report.stopped_reason.replace('_', ' ')}.",
+                    details=_audit_loop_details(analysis.audit_report),
+                )
+            )
+        usage_details = _local_model_usage_detail_lines(
+            local_model_usage,
+            audit_report=analysis.audit_report,
+            include_breakdown=True,
+        )
+        if usage_details:
+            agent_traces.append(
+                AgentTrace(
+                    name="Local Model Usage",
+                    status="complete",
+                    summary=usage_details[0],
+                    details=usage_details[1:],
+                )
+            )
     # For YouTube sources, build a shareable highlight-player link from the
     # timestamped highlights (no-op / None for articles, PDFs, or untimed reels).
     highlight_url = highlight_player_url(content, analysis.highlights)
@@ -378,6 +438,7 @@ async def _plan_research_topics(
     progress: ProgressCallback | None,
     chapters: list[Chapter] | None = None,
     highlights: list[Highlight] | None = None,
+    local_model_usage: list[OllamaUsage] | None = None,
 ) -> list[ResearchTopic]:
     if not research:
         await _emit(
@@ -408,6 +469,8 @@ async def _plan_research_topics(
     planner = LocalOllamaResearchPlanner()
     try:
         topics = await planner.plan(content, chapters=chapters, highlights=highlights)
+        if local_model_usage is not None:
+            local_model_usage.extend(planner.usage)
     except Exception as error:
         logger.info("consume.research_plan_failed url=%s error=%s", content.url, error)
         topics = fallback_research_topics_for_content(content)
@@ -461,6 +524,134 @@ def _research_sources(results: list[ResearchResult]) -> str:
     if sources:
         return ", ".join(sources)
     return research_provider_description()
+
+
+def _audit_loop_details(report: AuditReport) -> list[str]:
+    iteration_count = len(report.iterations)
+    details = [
+        f"Planner ran 1x: built {len(report.criteria)} total criteria.",
+        f"Evaluator ran {1 + iteration_count}x: initial evaluation plus one re-check per patch.",
+        f"Patcher ran {iteration_count}x.",
+        f"Score: {report.initial_score:.1f} -> {report.final_score:.1f} ({report.final_score - report.initial_score:+.1f}).",
+        f"Stop reason: {report.stopped_reason.replace('_', ' ')}.",
+        _usage_summary_line("Audit local model usage", report.local_model_usage),
+    ]
+
+    details.extend(_audit_score_snapshot_lines(report))
+    if not report.iterations:
+        details.append("No patch iterations ran; the initial audit already met the stop condition.")
+    else:
+        details.extend(
+            f"Iteration {iteration.iteration}: patched {iteration.criterion_id}; "
+            f"{iteration.before_score:.1f} -> {iteration.after_score:.1f} "
+            f"({iteration.improvement:+.1f}). "
+            f"Issue: {_audit_iteration_issue(iteration)} "
+            f"Repair: {iteration.smallest_repair or 'No repair text returned.'}"
+            for iteration in report.iterations
+        )
+
+    worst = sorted(
+        report.final_evaluation.criteria,
+        key=lambda item: (item.weighted_deficit, 100.0 - item.score),
+        reverse=True,
+    )[:3]
+    details.extend(
+        f"Final weakest: {item.criterion_id} scored {item.score:.0f}."
+        for item in worst
+    )
+    return details
+
+
+def _audit_score_snapshot_lines(report: AuditReport) -> list[str]:
+    return [
+        f"{snapshot.label}: weighted {snapshot.weighted_score:.1f}; "
+        + ", ".join(
+            f"{item.criterion_id} {item.score:.0f}" for item in snapshot.criteria
+        )
+        for snapshot in report.evaluations
+    ]
+
+
+def _audit_iteration_issue(iteration) -> str:
+    if not iteration.issues:
+        return "No issue text returned."
+    return " ".join(iteration.issues[:2])
+
+
+def _local_model_usage_detail_lines(
+    usage: list[OllamaUsage],
+    *,
+    audit_report: AuditReport | None,
+    include_breakdown: bool = False,
+) -> list[str]:
+    prompt_tokens = sum(item.prompt_tokens for item in usage)
+    completion_tokens = sum(item.completion_tokens for item in usage)
+    total_duration_ms = sum(item.total_duration_ms for item in usage)
+    calls = len(usage)
+    if audit_report is not None:
+        calls += audit_report.local_model_usage.calls
+        prompt_tokens += audit_report.local_model_usage.prompt_tokens
+        completion_tokens += audit_report.local_model_usage.completion_tokens
+        total_duration_ms += audit_report.local_model_usage.total_duration_ms
+
+    total_tokens = prompt_tokens + completion_tokens
+    if calls == 0 or total_tokens == 0:
+        return []
+
+    details = [
+        (
+            f"Local model tokens: {total_tokens:,} total "
+            f"({prompt_tokens:,} prompt + {completion_tokens:,} completion) "
+            f"across {calls} call(s), {_format_duration(total_duration_ms)}."
+        )
+    ]
+    if include_breakdown:
+        details.extend(_usage_breakdown_lines(usage, audit_report))
+    return details
+
+
+def _usage_breakdown_lines(
+    usage: list[OllamaUsage],
+    audit_report: AuditReport | None,
+) -> list[str]:
+    grouped: dict[str, list[int | float]] = {}
+    for item in usage:
+        row = grouped.setdefault(item.purpose, [0, 0, 0, 0.0])
+        row[0] += 1
+        row[1] += item.prompt_tokens
+        row[2] += item.completion_tokens
+        row[3] += item.total_duration_ms
+
+    if audit_report is not None:
+        for item in audit_report.local_model_usage_by_purpose:
+            row = grouped.setdefault(item.purpose, [0, 0, 0, 0.0])
+            row[0] += item.calls
+            row[1] += item.prompt_tokens
+            row[2] += item.completion_tokens
+            row[3] += item.total_duration_ms
+
+    return [
+        (
+            f"{purpose}: {int(row[1]) + int(row[2]):,} tokens "
+            f"({int(row[1]):,} prompt + {int(row[2]):,} completion), "
+            f"{int(row[0])} call(s), {_format_duration(float(row[3]))}."
+        )
+        for purpose, row in sorted(grouped.items())
+    ]
+
+
+def _usage_summary_line(prefix: str, usage) -> str:
+    return (
+        f"{prefix}: {usage.total_tokens:,} tokens "
+        f"({usage.prompt_tokens:,} prompt + {usage.completion_tokens:,} completion) "
+        f"across {usage.calls} call(s), {_format_duration(usage.total_duration_ms)}."
+    )
+
+
+def _format_duration(duration_ms: float) -> str:
+    if duration_ms >= 1000:
+        return f"{duration_ms / 1000:.1f}s"
+    return f"{duration_ms:.0f}ms"
 
 
 def _enrich_timed_analysis(

@@ -1,6 +1,10 @@
+import json
 import logging
 from collections.abc import Awaitable, Callable
 
+from pydantic import ValidationError
+
+from app.agents.audit_loop import AuditLoopAgent, AuditLoopOptions
 from app.agents.base import BaseLLMAgent
 from app.agents.errors import AnalysisError
 from app.agents.parsing import (
@@ -18,7 +22,7 @@ from app.agents.prompts.consumption import (
     text_segmentation_prompt,
     transcript_format_prompt,
 )
-from app.agents.prompts.inputs import content_end_seconds
+from app.agents.prompts.inputs import content_body_for_prompt, content_end_seconds
 from app.content.transcript import (
     caption_for_range,
     format_transcript_text,
@@ -158,6 +162,8 @@ class LocalOllamaConsumptionAgent(BaseLLMAgent):
         research_documents: list[ResearchDocument] | None,
         chapters: list[Chapter],
         highlights: list[Highlight],
+        audit_progress: Callable[[str, str, list[str]], Awaitable[None]] | None = None,
+        analysis_update: Callable[[ConsumptionAnalysis], Awaitable[None]] | None = None,
     ) -> ConsumptionAnalysis:
         """Phase two: the overall summary, with researched context folded in."""
         research_documents = research_documents or []
@@ -203,6 +209,8 @@ class LocalOllamaConsumptionAgent(BaseLLMAgent):
                         "highlights": highlights,
                     }
                 )
+                if analysis_update is not None:
+                    await analysis_update(analysis)
                 break
             except AnalysisError as error:
                 last_error = error
@@ -210,6 +218,15 @@ class LocalOllamaConsumptionAgent(BaseLLMAgent):
 
         if analysis is None:
             raise last_error or AnalysisError("Ollama analysis failed")
+
+        analysis = await self._audit_analysis(
+            content,
+            analysis,
+            chapters,
+            highlights,
+            audit_progress,
+            analysis_update,
+        )
 
         logger.info(
             "ollama.analysis_response raw_chars=%d key_points=%d novel_points=%d already_known=%d highlights=%d thinking_chars=%d",
@@ -221,6 +238,61 @@ class LocalOllamaConsumptionAgent(BaseLLMAgent):
             len(self.last_thinking),
         )
         return analysis
+
+    async def _audit_analysis(
+        self,
+        content: ContentResponse,
+        analysis: ConsumptionAnalysis,
+        chapters: list[Chapter],
+        highlights: list[Highlight],
+        audit_progress: Callable[[str, str, list[str]], Awaitable[None]] | None,
+        analysis_update: Callable[[ConsumptionAnalysis], Awaitable[None]] | None,
+    ) -> ConsumptionAnalysis:
+        source_text = content_body_for_prompt(content)
+        initial_output = _analysis_audit_output(analysis)
+        if not source_text.strip() or not initial_output.strip():
+            return analysis
+
+        audit_agent = AuditLoopAgent()
+        try:
+            async def emit_patched_analysis(output: str, _evaluation) -> None:
+                if analysis_update is None:
+                    return
+                patched_update = _parse_analysis(output).model_copy(
+                    update={
+                        "chapters": chapters,
+                        "highlights": highlights,
+                    }
+                )
+                await analysis_update(patched_update)
+
+            result = await audit_agent.run(
+                source_text=source_text,
+                user_goal=_analysis_audit_goal(content),
+                initial_output=initial_output,
+                options=AuditLoopOptions(max_iterations=3),
+                progress=audit_progress,
+                output_progress=emit_patched_analysis,
+            )
+            patched = _parse_analysis(result.final_output)
+            patched = patched.model_copy(
+                update={
+                    "chapters": chapters,
+                    "highlights": highlights,
+                    "audit_report": result.audit_report,
+                }
+            )
+            logger.info(
+                "ollama.analysis_audit_complete initial_score=%.2f final_score=%.2f iterations=%d reason=%s",
+                result.audit_report.initial_score,
+                result.audit_report.final_score,
+                len(result.audit_report.iterations),
+                result.audit_report.stopped_reason,
+            )
+            return patched
+        except (AnalysisError, ValidationError, ValueError) as error:
+            logger.info("ollama.analysis_audit_failed url=%s error=%s", content.url, error)
+            return analysis
 
     async def _chapters_for_content(self, content: ContentResponse) -> list[Chapter]:
         if not content.segments:
@@ -392,6 +464,31 @@ def _enrich_highlight_transcript(content: ContentResponse, highlight: Highlight)
             "timestamp": highlight.timestamp or format_timestamp_or_none(start),
             "end_timestamp": highlight.end_timestamp or format_timestamp_or_none(end),
         }
+    )
+
+
+def _analysis_audit_output(analysis: ConsumptionAnalysis) -> str:
+    data = analysis.model_dump(
+        mode="json",
+        exclude={
+            "audit_report": True,
+            "chapters": {"__all__": {"caption"}},
+            "highlights": {"__all__": {"caption"}},
+        },
+    )
+    return json.dumps(data, ensure_ascii=False, indent=2)
+
+
+def _analysis_audit_goal(content: ContentResponse) -> str:
+    return (
+        "Improve Defluff's generated consumption analysis for a reader who wants a dense, "
+        "source-grounded distillation. Preserve the JSON object shape and improve these "
+        "analysis fields when needed: summary, summary_points, tldr, reading_flow, context_helpers, "
+        "glossary, research_context, research_highlights, deep_dive_questions, key_points, "
+        "novel_points, already_known, chapters, and highlights. For chapters and highlights, "
+        "keep source order, preserve valid timestamp fields, do not invent ranges, and make the "
+        "smallest useful edit. Do not add unsupported claims. "
+        f"Source title: {content.title or content.url}"
     )
 
 

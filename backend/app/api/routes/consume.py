@@ -9,7 +9,7 @@ from app.agents import AnalysisError
 from app.api.streaming import stream_from_queue, to_ndjson
 from app.content import ContentError
 from app.core.debug_log import DEBUG_LOG_PATH, write_debug_event
-from app.schemas import ConsumeRequest, ConsumeResponse, ConsumeStreamEvent
+from app.schemas import AgentTrace, ConsumeRequest, ConsumeResponse, ConsumeStreamEvent
 from app.services.consume import consume_url
 
 logger = logging.getLogger(__name__)
@@ -92,4 +92,13 @@ def _consume_event_stream(payload: ConsumeRequest) -> AsyncIterator[str]:
     return stream_from_queue(
         worker,
         serialize=lambda event: to_ndjson(event.model_dump(mode="json", exclude_none=True)),
+        heartbeat=lambda: ConsumeStreamEvent(
+            type="trace",
+            trace=AgentTrace(
+                name="Backend",
+                status="running",
+                summary="Still working locally; waiting for the current model step.",
+            ),
+        ),
+        heartbeat_seconds=15.0,
     )

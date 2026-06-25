@@ -5,9 +5,18 @@ of which submodule a model lives in.
 """
 
 from app.schemas.analysis import (
+    AuditCriterion,
+    AuditEvaluation,
+    AuditIteration,
+    AuditLoopResult,
+    AuditReport,
+    AuditScoreSnapshot,
     Chapter,
     ConsumptionAnalysis,
+    CriterionEvaluation,
     Highlight,
+    LocalModelUsage,
+    LocalModelUsageByPurpose,
     ResearchHighlight,
     TermExplanation,
 )
@@ -39,6 +48,12 @@ from app.schemas.urls import UrlRecord, UrlStatus, UrlSubmission
 
 __all__ = [
     "AgentTrace",
+    "AuditCriterion",
+    "AuditEvaluation",
+    "AuditIteration",
+    "AuditLoopResult",
+    "AuditReport",
+    "AuditScoreSnapshot",
     "CaptionRequest",
     "CaptionResponse",
     "CaptionSegment",
@@ -55,11 +70,14 @@ __all__ = [
     "ContentMediaKind",
     "ContentRequest",
     "ContentResponse",
+    "CriterionEvaluation",
     "DiscussMessage",
     "DiscussRequest",
     "Highlight",
     "KnowledgeMatch",
     "LearnRequest",
+    "LocalModelUsage",
+    "LocalModelUsageByPurpose",
     "ResearchDocument",
     "ResearchHighlight",
     "ResearchResult",

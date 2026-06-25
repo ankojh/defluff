@@ -94,6 +94,8 @@ struct ContentView: View {
     @State private var streamedAnalysis: ConsumptionAnalysis?
     @State private var streamedHighlights: [Highlight] = []
     @State private var streamedChapters: [Chapter] = []
+    @State private var isAuditRefining = false
+    @State private var auditPulse = false
     @State private var learnedKeys: Set<String> = []
 
     @State private var discussion: [DiscussTurn] = []
@@ -472,6 +474,8 @@ struct ContentView: View {
         streamedAnalysis = nil
         streamedHighlights = []
         streamedChapters = []
+        isAuditRefining = false
+        auditPulse = false
         learnedKeys = []
         discussion = []
         questionText = ""
@@ -499,9 +503,17 @@ struct ContentView: View {
                     if let analysis = event.analysis {
                         withAnimation(.easeInOut(duration: 0.2)) {
                             streamedAnalysis = analysis
+                            if !analysis.highlights.isEmpty {
+                                streamedHighlights = sortedHighlights(analysis.highlights)
+                            }
+                            if !analysis.chapters.isEmpty {
+                                streamedChapters = sortedChapters(analysis.chapters)
+                            }
                         }
-                        statusMessage = "Summary ready"
+                        statusMessage = isAuditRefining ? "Refining summary..." : "Summary ready"
                     }
+                case "audit":
+                    updateAuditState(event.message)
                 case "highlight":
                     if let highlight = event.highlight {
                         appendStreamedHighlight(highlight)
@@ -522,6 +534,8 @@ struct ContentView: View {
                             streamedAnalysis = nil
                             streamedHighlights = []
                             streamedChapters = []
+                            isAuditRefining = false
+                            auditPulse = false
                         }
                         statusMessage = "Ready"
                         urlText = ""
@@ -532,6 +546,8 @@ struct ContentView: View {
                     streamedAnalysis = nil
                     streamedHighlights = []
                     streamedChapters = []
+                    isAuditRefining = false
+                    auditPulse = false
                     statusMessage = event.message ?? "Backend stream failed."
                     AppDebugLog.write("consume.backend_error", fields: ["message": statusMessage])
                 default:
@@ -544,6 +560,8 @@ struct ContentView: View {
             streamedAnalysis = nil
             streamedHighlights = []
             streamedChapters = []
+            isAuditRefining = false
+            auditPulse = false
             statusMessage = error.localizedDescription
             AppDebugLog.write("consume.client_error", fields: ["message": statusMessage])
         }
@@ -559,15 +577,34 @@ struct ContentView: View {
         }
     }
 
+    private func updateAuditState(_ message: String?) {
+        let running = message == "running"
+        if running {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isAuditRefining = true
+                auditPulse = false
+            }
+            DispatchQueue.main.async {
+                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+                    auditPulse = true
+                }
+            }
+        } else {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isAuditRefining = false
+                auditPulse = false
+            }
+        }
+        statusMessage = running ? "Improving the distillation..." : "Distillation refined"
+    }
+
     private func appendStreamedHighlight(_ highlight: Highlight) {
         guard !streamedHighlights.contains(where: { $0.id == highlight.id }) else {
             return
         }
         withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) {
             streamedHighlights.append(highlight)
-            streamedHighlights.sort { lhs, rhs in
-                (lhs.start ?? .greatestFiniteMagnitude) < (rhs.start ?? .greatestFiniteMagnitude)
-            }
+            streamedHighlights = sortedHighlights(streamedHighlights)
         }
     }
 
@@ -577,9 +614,19 @@ struct ContentView: View {
         }
         withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) {
             streamedChapters.append(chapter)
-            streamedChapters.sort { lhs, rhs in
-                (lhs.start ?? .greatestFiniteMagnitude) < (rhs.start ?? .greatestFiniteMagnitude)
-            }
+            streamedChapters = sortedChapters(streamedChapters)
+        }
+    }
+
+    private func sortedHighlights(_ highlights: [Highlight]) -> [Highlight] {
+        highlights.sorted {
+            ($0.start ?? .greatestFiniteMagnitude) < ($1.start ?? .greatestFiniteMagnitude)
+        }
+    }
+
+    private func sortedChapters(_ chapters: [Chapter]) -> [Chapter] {
+        chapters.sorted {
+            ($0.start ?? .greatestFiniteMagnitude) < ($1.start ?? .greatestFiniteMagnitude)
         }
     }
 
@@ -810,36 +857,65 @@ struct ContentView: View {
                 headerSection(content)
             }
 
-            if let analysis = streamedAnalysis, hasAnalysis(analysis) {
-                if let tldr = analysis.tldr {
-                    tldrSection(tldr)
-                }
-                keyTakeawaysSection(analysis.keyPoints, novel: analysis.novelPoints)
-                summarySection(analysis)
-                bulletSection(title: "Flow", items: analysis.readingFlow)
-                bulletSection(title: "Context helpers", items: analysis.contextHelpers)
-                if !analysis.glossary.isEmpty {
-                    glossarySection(analysis.glossary)
-                }
+            if isAuditRefining {
+                refinementBadge
             }
 
-            if !streamedHighlights.isEmpty {
-                highlightsSection(
-                    streamedHighlights,
-                    sourceURL: streamedContent?.url ?? "",
-                    sourceTitle: streamedContent?.title
-                )
-            }
+            VStack(alignment: .leading, spacing: 20) {
+                if let analysis = streamedAnalysis, hasAnalysis(analysis) {
+                    if let tldr = analysis.tldr {
+                        tldrSection(tldr)
+                    }
+                    keyTakeawaysSection(analysis.keyPoints, novel: analysis.novelPoints)
+                    summarySection(analysis)
+                    bulletSection(title: "Flow", items: analysis.readingFlow)
+                    bulletSection(title: "Context helpers", items: analysis.contextHelpers)
+                    if !analysis.glossary.isEmpty {
+                        glossarySection(analysis.glossary)
+                    }
+                }
 
-            if !streamedChapters.isEmpty {
-                chaptersSection(
-                    streamedChapters,
-                    sourceURL: streamedContent?.url ?? "",
-                    sourceTitle: streamedContent?.title
-                )
+                if !streamedHighlights.isEmpty {
+                    highlightsSection(
+                        streamedHighlights,
+                        sourceURL: streamedContent?.url ?? "",
+                        sourceTitle: streamedContent?.title
+                    )
+                }
+
+                if !streamedChapters.isEmpty {
+                    chaptersSection(
+                        streamedChapters,
+                        sourceURL: streamedContent?.url ?? "",
+                        sourceTitle: streamedContent?.title
+                    )
+                }
             }
+            .opacity(refinementOpacity)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var refinementOpacity: Double {
+        guard isAuditRefining else { return 1 }
+        return auditPulse ? 0.48 : 0.68
+    }
+
+    private var refinementBadge: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.mini)
+                .tint(Theme.inkFaint)
+            Text("Refining summary, highlights, and chapters")
+                .font(Theme.text(11, weight: .semibold))
+                .tracking(1.2)
+                .foregroundStyle(Theme.inkFaint)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Theme.paper)
+        .clipShape(Capsule())
+        .overlay(Capsule().strokeBorder(Theme.hairline, lineWidth: 1))
     }
 
     // MARK: Discussion

@@ -15,6 +15,8 @@ async def stream_from_queue(
     worker: Callable[[asyncio.Queue], Awaitable[None]],
     *,
     serialize: Callable[[Any], str],
+    heartbeat: Callable[[], Any] | None = None,
+    heartbeat_seconds: float = 20.0,
 ) -> AsyncIterator[str]:
     """Run ``worker`` (which pushes events onto a queue) and stream them out.
 
@@ -33,7 +35,12 @@ async def stream_from_queue(
     task = asyncio.create_task(runner())
     try:
         while True:
-            event = await queue.get()
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=heartbeat_seconds)
+            except asyncio.TimeoutError:
+                if heartbeat is not None:
+                    yield serialize(heartbeat())
+                continue
             if event is None:
                 break
             yield serialize(event)

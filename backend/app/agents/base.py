@@ -10,12 +10,24 @@ assembly. Subclasses add prompt builders (``app.agents.prompts``) and parsers
 import asyncio
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 
 import ollama
 
 from app.agents.errors import AnalysisError
 from app.core.config import settings
 from app.integrations.ollama import chunk_parts, make_client
+
+
+@dataclass(frozen=True)
+class OllamaUsage:
+    """Token and timing counters returned by one Ollama call."""
+
+    purpose: str
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    total_duration_ms: float = 0.0
 
 
 async def complete_json(
@@ -28,7 +40,7 @@ async def complete_json(
     purpose: str,
     think: bool = True,
     on_thinking: Callable[[str], Awaitable[None]] | None = None,
-) -> tuple[str, str]:
+) -> tuple[str, str, OllamaUsage]:
     """Stream an Ollama chat, returning (json_content, thinking).
 
     When ``think`` is set, gemma's reasoning is streamed to ``on_thinking``
@@ -38,8 +50,10 @@ async def complete_json(
     """
     content_parts: list[str] = []
     thinking_parts: list[str] = []
+    usage = OllamaUsage(purpose=purpose)
 
     async def _run() -> None:
+        nonlocal usage
         last_emit = 0.0
         stream = await client.chat(
             model=settings.ollama_model,
@@ -60,6 +74,7 @@ async def complete_json(
         )
         async for part in stream:
             content, thinking = chunk_parts(part)
+            usage = _usage_from_part(part, purpose, usage)
             if thinking:
                 thinking_parts.append(thinking)
                 if on_thinking is not None:
@@ -84,7 +99,7 @@ async def complete_json(
     if not raw.strip():
         raise AnalysisError(f"Ollama returned an empty {purpose} response")
 
-    return raw, thinking
+    return raw, thinking, usage
 
 
 class BaseLLMAgent:
@@ -93,6 +108,7 @@ class BaseLLMAgent:
     def __init__(self) -> None:
         self.client = make_client()
         self.last_thinking = ""
+        self.usage: list[OllamaUsage] = []
 
     @staticmethod
     def model_name() -> str:
@@ -110,7 +126,7 @@ class BaseLLMAgent:
         on_thinking: Callable[[str], Awaitable[None]] | None = None,
     ) -> tuple[str, str]:
         """Run one JSON chat turn, accumulating streamed thinking on the agent."""
-        raw, thinking = await complete_json(
+        raw, thinking, usage = await complete_json(
             self.client,
             system=system,
             prompt=prompt,
@@ -121,8 +137,46 @@ class BaseLLMAgent:
             on_thinking=on_thinking,
         )
         self.last_thinking += thinking
+        self.usage.append(usage)
         return raw, thinking
 
     async def run(self, *args, **kwargs):
         """Entry point for multi-step (loop-based) agents. Override in subclasses."""
         raise NotImplementedError
+
+
+def _usage_from_part(part: object, purpose: str, fallback: OllamaUsage) -> OllamaUsage:
+    prompt_tokens = _part_int(part, "prompt_eval_count")
+    completion_tokens = _part_int(part, "eval_count")
+    total_duration_ns = _part_int(part, "total_duration")
+
+    if prompt_tokens is None and completion_tokens is None and total_duration_ns is None:
+        return fallback
+
+    prompt_tokens = prompt_tokens or fallback.prompt_tokens
+    completion_tokens = completion_tokens or fallback.completion_tokens
+    total_duration_ms = (
+        total_duration_ns / 1_000_000
+        if total_duration_ns is not None
+        else fallback.total_duration_ms
+    )
+    return OllamaUsage(
+        purpose=purpose,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        total_duration_ms=total_duration_ms,
+    )
+
+
+def _part_int(part: object, key: str) -> int | None:
+    if isinstance(part, dict):
+        value = part.get(key)
+    else:
+        value = getattr(part, key, None)
+
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    return None
